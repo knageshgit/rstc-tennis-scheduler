@@ -6,6 +6,8 @@ import {
   playerStats,
   courtSpread,
   teamGap,
+  courtName,
+  DEFAULT_COURT_NAMES,
   MAX_ON_COURT,
   PLAYERS_PER_COURT,
   type Player,
@@ -70,4 +72,18 @@ console.log(
   Math.max(...spreads).toFixed(1)
 );
 console.log("Byes per player (spread):", Math.min(...byeCounts), "-", Math.max(...byeCounts));
+
+// --- configurable courts + named courts ---
+const fewCourts = 4;
+const s4 = generateSchedule(players, 5, 2026, fewCourts);
+for (const rnd of s4.rounds) {
+  if (rnd.matches.length !== fewCourts) throw new Error("numCourts not honored: " + rnd.matches.length);
+}
+if (partnerRepeats(s4).length) throw new Error("repeats with 4 courts");
+const names = s4.rounds[0].matches
+  .sort((a, b) => a.court - b.court)
+  .map((m) => courtName(m.court));
+console.log("\nWith numCourts=4:", s4.rounds[0].matches.length, "courts/round; names:", names.join(", "));
+if (courtName(1) !== DEFAULT_COURT_NAMES[0]) throw new Error("court name mapping wrong");
+
 console.log("\nAll invariants passed ✓");

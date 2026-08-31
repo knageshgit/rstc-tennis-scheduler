@@ -19,9 +19,27 @@ export const PLAYERS_PER_COURT = 4;
 export const MAX_ON_COURT = MAX_COURTS * PLAYERS_PER_COURT; // 24 play at once
 export const MAX_PLAYERS = 40; // registered cap; extras rotate through byes
 
+// Default facility court names, in court order (court 1..6).
+export const DEFAULT_COURT_NAMES = [
+  "Shorebird 1",
+  "Shorebird 2",
+  "Dolphin 1",
+  "Dolphin 2",
+  "Preserve 1",
+  "Preserve 2",
+];
+
+/** Resolve a 1-indexed court number to its display name. */
+export function courtName(court: number, names: string[] = DEFAULT_COURT_NAMES): string {
+  return names[court - 1]?.trim() || `Court ${court}`;
+}
+
+export type Gender = "M" | "F" | "";
+
 export interface Player {
   name: string;
   level: number;
+  gender?: Gender;
 }
 
 export interface Match {
@@ -45,6 +63,7 @@ export interface Schedule {
 export interface PlayerStat {
   name: string;
   level: number;
+  gender: Gender;
   matches: number;
   byes: number;
   partners: string[];
@@ -77,10 +96,10 @@ function allIndices(m: Match): number[] {
   return [m.teamA[0], m.teamA[1], m.teamB[0], m.teamB[1]];
 }
 
-function activeCount(n: number): number {
+function activeCount(n: number, numCourts: number): number {
   return Math.min(
     PLAYERS_PER_COURT * Math.floor(n / PLAYERS_PER_COURT),
-    MAX_ON_COURT
+    numCourts * PLAYERS_PER_COURT
   );
 }
 
@@ -201,12 +220,19 @@ export function generateSchedule(
   players: Player[],
   numRounds = 5,
   seed?: number,
+  numCourts: number = MAX_COURTS,
   restarts = 6000
 ): Schedule {
   validate(players, numRounds);
 
+  const courts = Math.max(1, Math.min(MAX_COURTS, Math.floor(numCourts)));
   const n = players.length;
-  const active_n = activeCount(n);
+  const active_n = activeCount(n, courts);
+  if (active_n < PLAYERS_PER_COURT) {
+    throw new ScheduleError(
+      `With ${n} players and ${courts} court(s), no full doubles court can be formed.`
+    );
+  }
   const masterRng = makeRng(seed ?? Math.floor(Math.random() * 2 ** 31));
 
   let best: Schedule | null = null;
@@ -313,7 +339,15 @@ export function playerStats(s: Schedule): PlayerStat[] {
         }
       }
     }
-    return { name: p.name, level: p.level, matches, byes, partners, opponents };
+    return {
+      name: p.name,
+      level: p.level,
+      gender: p.gender ?? "",
+      matches,
+      byes,
+      partners,
+      opponents,
+    };
   });
 }
 
