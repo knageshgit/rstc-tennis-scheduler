@@ -1,69 +1,397 @@
-import Image from "next/image";
+"use client";
+
+import { useMemo, useRef, useState } from "react";
+
+import type { RosterRow } from "@/lib/excel";
+import {
+  MAX_ON_COURT,
+  MAX_PLAYERS,
+  PLAYERS_PER_COURT,
+  Player,
+  Schedule,
+  ScheduleError,
+  courtSpread,
+  generateSchedule,
+  round2,
+  teamGap,
+  teamLevel,
+} from "@/lib/scheduler";
+
+type Row = { name: string; level: string }; // level kept as string for editing
+
+function toRows(roster: RosterRow[]): Row[] {
+  return roster.map((r) => ({
+    name: r.name,
+    level: r.level === null ? "" : String(r.level),
+  }));
+}
+
+function rowsToPlayers(rows: Row[]): { players?: Player[]; error?: string } {
+  const players: Player[] = [];
+  const names = new Set<string>();
+  for (const [i, r] of rows.entries()) {
+    const name = r.name.trim();
+    if (!name) continue; // ignore blank rows
+    if (names.has(name.toLowerCase()))
+      return { error: `Duplicate player name: "${name}".` };
+    names.add(name.toLowerCase());
+    const lvl = Number(r.level);
+    if (r.level.trim() === "" || !Number.isFinite(lvl))
+      return { error: `Row ${i + 1} (${name}) needs a numeric rating.` };
+    players.push({ name, level: lvl });
+  }
+  if (players.length < PLAYERS_PER_COURT)
+    return { error: `Need at least ${PLAYERS_PER_COURT} rated players.` };
+  return { players };
+}
 
 export default function Home() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [fileName, setFileName] = useState<string>("");
+  const [numRounds, setNumRounds] = useState(5);
+  const [seed, setSeed] = useState("");
+  const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [error, setError] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const missingCount = rows.filter(
+    (r) => r.name.trim() && (r.level.trim() === "" || !Number.isFinite(Number(r.level)))
+  ).length;
+  const validCount = rows.filter((r) => r.name.trim()).length;
+  const playing = PLAYERS_PER_COURT * Math.floor(Math.min(validCount, MAX_ON_COURT) / PLAYERS_PER_COURT);
+  const byesEach = Math.max(0, Math.min(validCount, MAX_PLAYERS) - playing);
+
+  async function onFile(file: File) {
+    setError("");
+    setSchedule(null);
+    setFileName(file.name);
+    try {
+      const buf = await file.arrayBuffer();
+      const { parseRoster } = await import("@/lib/excel");
+      const result = await parseRoster(buf);
+      setRows(toRows(result.rows));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setRows([]);
+    }
+  }
+
+  function updateRow(i: number, patch: Partial<Row>) {
+    setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  }
+  function addRow() {
+    setRows((prev) => [...prev, { name: "", level: "" }]);
+  }
+  function removeRow(i: number) {
+    setRows((prev) => prev.filter((_, j) => j !== i));
+  }
+
+  async function generate() {
+    setError("");
+    setSchedule(null);
+    const { players, error: verr } = rowsToPlayers(rows);
+    if (verr || !players) {
+      setError(verr ?? "Invalid roster.");
+      return;
+    }
+    setBusy(true);
+    // Yield so the spinner can paint before the (fast) synchronous solve.
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const seedNum = seed.trim() === "" ? undefined : Number(seed.trim());
+      if (seed.trim() !== "" && !Number.isInteger(seedNum)) {
+        throw new ScheduleError("Seed must be a whole number.");
+      }
+      const s = generateSchedule(players, numRounds, seedNum);
+      setSchedule(s);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function download() {
+    if (!schedule) return;
+    const { buildScheduleWorkbook } = await import("@/lib/excel");
+    const buf = await buildScheduleWorkbook(schedule);
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tennis_schedule.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const metrics = useMemo(() => {
+    if (!schedule) return null;
+    const spreads: number[] = [];
+    const gaps: number[] = [];
+    for (const rnd of schedule.rounds)
+      for (const m of rnd.matches) {
+        spreads.push(courtSpread(schedule, m));
+        gaps.push(teamGap(schedule, m));
+      }
+    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+    return {
+      spread: avg(spreads).toFixed(2),
+      gap: avg(gaps).toFixed(2),
+      maxSpread: Math.max(...spreads).toFixed(1),
+    };
+  }, [schedule]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+    <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-12">
+      <header className="mb-8">
+        <h1 className="text-2xl font-bold sm:text-3xl">🎾 Tennis Doubles Mixer Scheduler</h1>
+        <p className="mt-2 text-sm opacity-70">
+          Upload a roster, fill in any missing ratings, and generate a balanced doubles
+          schedule: similar-level players face off each round, and no two people are ever
+          teammates twice. Download the result as Excel.
+        </p>
+      </header>
+
+      {/* Upload */}
+      <section className="mb-6 rounded-xl border border-black/10 p-5 dark:border-white/15">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-semibold">1. Upload roster (.xlsx)</h2>
+            <p className="mt-1 text-xs opacity-60">
+              Needs a name column (or First/Last name) and a level column (Level, NTRP,
+              USDA, or Tournament Rating).
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".xlsx"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <button
+              onClick={() => fileInput.current?.click()}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+            >
+              Choose file
+            </button>
+          </div>
         </div>
-      </main>
+        {fileName && (
+          <p className="mt-3 text-xs opacity-70">
+            Loaded <span className="font-medium">{fileName}</span> - {validCount} players
+            {missingCount > 0 && (
+              <span className="text-amber-600 dark:text-amber-400">
+                {" "}
+                ({missingCount} missing a rating - fill them below)
+              </span>
+            )}
+          </p>
+        )}
+      </section>
+
+      {error && (
+        <div className="mb-6 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          {error}
+        </div>
+      )}
+
+      {/* Roster editor */}
+      {rows.length > 0 && (
+        <section className="mb-6 rounded-xl border border-black/10 p-5 dark:border-white/15">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold">2. Review &amp; edit roster</h2>
+            <button onClick={addRow} className="text-sm text-emerald-700 hover:underline dark:text-emerald-400">
+              + Add player
+            </button>
+          </div>
+          <div className="max-h-96 overflow-auto rounded-lg border border-black/10 dark:border-white/10">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-black/5 dark:bg-white/10">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">#</th>
+                  <th className="px-3 py-2 text-left font-medium">Name</th>
+                  <th className="px-3 py-2 text-left font-medium">Rating</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const bad = r.name.trim() && (r.level.trim() === "" || !Number.isFinite(Number(r.level)));
+                  return (
+                    <tr key={i} className={bad ? "bg-amber-50 dark:bg-amber-950/40" : ""}>
+                      <td className="px-3 py-1.5 opacity-50">{i + 1}</td>
+                      <td className="px-3 py-1.5">
+                        <input
+                          value={r.name}
+                          onChange={(e) => updateRow(i, { name: e.target.value })}
+                          className="w-full rounded border border-transparent bg-transparent px-2 py-1 outline-none focus:border-emerald-500"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <input
+                          value={r.level}
+                          inputMode="decimal"
+                          placeholder={bad ? "needed" : ""}
+                          onChange={(e) => updateRow(i, { level: e.target.value })}
+                          className={`w-24 rounded border px-2 py-1 outline-none focus:border-emerald-500 ${
+                            bad ? "border-amber-400" : "border-black/15 dark:border-white/20"
+                          } bg-transparent`}
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <button
+                          onClick={() => removeRow(i)}
+                          className="text-xs opacity-50 hover:text-red-600 hover:opacity-100"
+                        >
+                          remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {byesEach > 0 && (
+            <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              {validCount} players is not a multiple of 4, so {byesEach} player(s) will sit
+              out each round on a fair rotation ({playing / PLAYERS_PER_COURT} courts in play).
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* Settings + generate */}
+      {rows.length > 0 && (
+        <section className="mb-6 flex flex-col gap-4 rounded-xl border border-black/10 p-5 dark:border-white/15 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex gap-6">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="opacity-70">Rounds</span>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={numRounds}
+                onChange={(e) => setNumRounds(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                className="w-24 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="opacity-70">Seed (optional)</span>
+              <input
+                value={seed}
+                onChange={(e) => setSeed(e.target.value)}
+                placeholder="random"
+                className="w-32 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+              />
+            </label>
+          </div>
+          <button
+            onClick={generate}
+            disabled={busy}
+            className="rounded-lg bg-emerald-700 px-6 py-3 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+          >
+            {busy ? "Optimizing..." : "3. Generate schedule"}
+          </button>
+        </section>
+      )}
+
+      {/* Results */}
+      {schedule && metrics && (
+        <section className="rounded-xl border border-black/10 p-5 dark:border-white/15">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="font-semibold text-emerald-700 dark:text-emerald-400">
+              Schedule ready - no repeated partnerships ✓
+            </h2>
+            <button
+              onClick={download}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
+            >
+              ⬇ Download Excel (.xlsx)
+            </button>
+          </div>
+
+          <div className="mb-6 grid grid-cols-3 gap-3">
+            <Metric label="Avg court spread" value={metrics.spread} />
+            <Metric label="Avg team gap" value={metrics.gap} />
+            <Metric label="Widest court" value={metrics.maxSpread} />
+          </div>
+
+          <div className="space-y-6">
+            {schedule.rounds.map((rnd) => (
+              <div key={rnd.number}>
+                <h3 className="mb-2 font-semibold">Round {rnd.number}</h3>
+                <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+                  <table className="w-full text-sm">
+                    <thead className="bg-black/5 dark:bg-white/10">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium">Court</th>
+                        <th className="px-3 py-2 text-left font-medium">Team A</th>
+                        <th className="px-3 py-2 text-center font-medium">Lvl</th>
+                        <th className="px-3 py-2 text-center font-medium"></th>
+                        <th className="px-3 py-2 text-left font-medium">Team B</th>
+                        <th className="px-3 py-2 text-center font-medium">Lvl</th>
+                        <th className="px-3 py-2 text-center font-medium">Spread</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...rnd.matches]
+                        .sort((a, b) => a.court - b.court)
+                        .map((m) => (
+                          <tr key={m.court} className="border-t border-black/5 dark:border-white/5">
+                            <td className="px-3 py-2">{m.court}</td>
+                            <td className="px-3 py-2">
+                              {schedule.players[m.teamA[0]].name} &amp; {schedule.players[m.teamA[1]].name}
+                            </td>
+                            <td className="px-3 py-2 text-center opacity-70">
+                              {round2(teamLevel(schedule, m.teamA) / 2)}
+                            </td>
+                            <td className="px-3 py-2 text-center opacity-40">vs</td>
+                            <td className="px-3 py-2">
+                              {schedule.players[m.teamB[0]].name} &amp; {schedule.players[m.teamB[1]].name}
+                            </td>
+                            <td className="px-3 py-2 text-center opacity-70">
+                              {round2(teamLevel(schedule, m.teamB) / 2)}
+                            </td>
+                            <td className="px-3 py-2 text-center opacity-70">
+                              {round2(courtSpread(schedule, m))}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+                {rnd.byes.length > 0 && (
+                  <p className="mt-1 text-xs opacity-60">
+                    Byes: {rnd.byes.map((i) => schedule.players[i].name).join(", ")}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <footer className="mt-10 text-center text-xs opacity-40">
+        Doubles mixer - up to {MAX_COURTS_LABEL} courts, {MAX_ON_COURT} players on court -
+        courts grouped by level, unique partners every round.
+      </footer>
+    </main>
+  );
+}
+
+const MAX_COURTS_LABEL = 6;
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-black/10 p-3 text-center dark:border-white/10">
+      <div className="text-2xl font-bold">{value}</div>
+      <div className="mt-1 text-xs opacity-60">{label}</div>
     </div>
   );
 }

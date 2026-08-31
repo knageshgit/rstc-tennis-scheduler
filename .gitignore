@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python (bundled reference version under /python)
+python/.venv/
+__pycache__/
+*.pyc
+python/tennis_schedule.xlsx
+
+# excel lock files
+~$*
