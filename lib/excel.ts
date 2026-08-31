@@ -4,8 +4,11 @@
 import ExcelJS from "exceljs";
 
 import {
+  DEFAULT_COURT_NAMES,
+  Gender,
   Schedule,
   courtAvg,
+  courtName,
   courtSpread,
   playerStats,
   round2,
@@ -27,10 +30,19 @@ const LEVEL_ALIASES = new Set([
   "usta level",
   "tournament rating",
 ]);
+const GENDER_ALIASES = new Set(["gender", "sex", "m/f"]);
+
+function normalizeGender(raw: string): Gender {
+  const c = raw.trim().toLowerCase()[0];
+  if (c === "m") return "M";
+  if (c === "f" || c === "w") return "F"; // female / woman
+  return "";
+}
 
 export interface RosterRow {
   name: string;
   level: number | null; // null when the source cell is blank / unparsable
+  gender: Gender;
 }
 
 export interface ParseResult {
@@ -77,6 +89,11 @@ export async function parseRoster(data: ArrayBuffer): Promise<ParseResult> {
   const firstH = find(FIRST_ALIASES);
   const lastH = find(LAST_ALIASES);
   const levelH = find(LEVEL_ALIASES);
+  // A roster may have more than one gender-ish column (e.g. "Gender" = M/F and
+  // "Gender.1" = Male/Female); gather them all and use the first non-empty value.
+  const genderCols = headers.filter(
+    (h) => GENDER_ALIASES.has(h.key) || h.key.startsWith("gender")
+  );
 
   const hasName = !!nameH || !!firstH || !!lastH;
   if (!hasName || !levelH) {
@@ -110,7 +127,17 @@ export async function parseRoster(data: ArrayBuffer): Promise<ParseResult> {
       const n = Number(rawLevel);
       level = Number.isFinite(n) ? n : null;
     }
-    rows.push({ name, level });
+
+    let gender: Gender = "";
+    for (const gc of genderCols) {
+      const g = normalizeGender(cellText(row.getCell(gc.col).value));
+      if (g) {
+        gender = g;
+        break;
+      }
+    }
+
+    rows.push({ name, level, gender });
   }
 
   const nameLabels = [nameH?.label, firstH?.label, lastH?.label].filter(
@@ -148,7 +175,10 @@ function autosize(ws: ExcelJS.Worksheet, maxWidth = 40) {
   });
 }
 
-export async function buildScheduleWorkbook(s: Schedule): Promise<ArrayBuffer> {
+export async function buildScheduleWorkbook(
+  s: Schedule,
+  courtNames: string[] = DEFAULT_COURT_NAMES
+): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Tennis Doubles Mixer Scheduler";
   wb.created = new Date();
@@ -188,7 +218,7 @@ export async function buildScheduleWorkbook(s: Schedule): Promise<ArrayBuffer> {
       const [a1, a2] = [s.players[m.teamA[0]].name, s.players[m.teamA[1]].name];
       const [b1, b2] = [s.players[m.teamB[0]].name, s.players[m.teamB[1]].name];
       const row = ws.addRow([
-        m.court,
+        courtName(m.court, courtNames),
         `${a1} & ${a2}`,
         round2(teamLevel(s, m.teamA) / 2),
         "vs",
@@ -220,7 +250,7 @@ export async function buildScheduleWorkbook(s: Schedule): Promise<ArrayBuffer> {
 
   // --- By Player sheet ---
   const ps = wb.addWorksheet("By Player");
-  const pHeaders = ["Player", "Level", "Matches", "Byes", "Partners", "Opponents"];
+  const pHeaders = ["Player", "Level", "Gender", "Matches", "Byes", "Partners", "Opponents"];
   const ph = ps.addRow(pHeaders);
   ph.eachCell((cell) => {
     cell.fill = HEADER_FILL;
@@ -235,6 +265,7 @@ export async function buildScheduleWorkbook(s: Schedule): Promise<ArrayBuffer> {
     const row = ps.addRow([
       st.name,
       st.level,
+      st.gender,
       st.matches,
       st.byes,
       st.partners.join(", "),
@@ -243,7 +274,7 @@ export async function buildScheduleWorkbook(s: Schedule): Promise<ArrayBuffer> {
     row.eachCell((cell, col) => {
       cell.border = BORDER;
       cell.alignment = {
-        horizontal: col >= 2 && col <= 4 ? "center" : "left",
+        horizontal: col >= 2 && col <= 5 ? "center" : "left",
         vertical: "middle",
       };
     });
