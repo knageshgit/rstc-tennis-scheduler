@@ -5,11 +5,13 @@ import ExcelJS from "exceljs";
 
 import {
   DEFAULT_COURT_NAMES,
+  FORMATS,
   Gender,
   Schedule,
   courtAvg,
   courtName,
   courtSpread,
+  drawLabel,
   playerStats,
   round2,
   teamGap,
@@ -175,6 +177,38 @@ function autosize(ws: ExcelJS.Worksheet, maxWidth = 40) {
   });
 }
 
+/** One-line description of how the roster maps onto courts for this format. */
+function formatSummary(s: Schedule): string {
+  const l = s.layout;
+  const bits: string[] = [`${s.players.length} players`];
+  if (s.format === "same") {
+    bits.push(
+      `${l.menCourts} men's court(s) (${l.men} men), ` +
+        `${l.womenCourts} women's court(s) (${l.women} women)`
+    );
+  } else if (s.format === "mixed") {
+    bits.push(`${l.courtsUsed} court(s), ${l.men} men / ${l.women} women`);
+  } else {
+    bits.push(`${l.courtsUsed} court(s)`);
+  }
+  bits.push(
+    l.byesPerRound > 0 ? `${l.byesPerRound} bye(s) per round` : "no byes"
+  );
+  return bits.join(" - ");
+}
+
+/** Bye line for a round, split by draw when the format is gendered. */
+function byesText(s: Schedule, byes: number[]): string {
+  const names = (idxs: number[]) => idxs.map((i) => s.players[i].name).join(", ");
+  if (s.format === "open") return `Byes: ${names(byes)}`;
+  const men = byes.filter((i) => s.players[i].gender === "M");
+  const women = byes.filter((i) => s.players[i].gender === "F");
+  const parts: string[] = [];
+  if (men.length) parts.push(`Men: ${names(men)}`);
+  if (women.length) parts.push(`Women: ${names(women)}`);
+  return `Byes - ${parts.join("  |  ")}`;
+}
+
 export async function buildScheduleWorkbook(
   s: Schedule,
   courtNames: string[] = DEFAULT_COURT_NAMES
@@ -185,8 +219,12 @@ export async function buildScheduleWorkbook(
 
   // --- Schedule sheet ---
   const ws = wb.addWorksheet("Schedule");
+  // Same-gender play splits the courts into a men's and a women's draw, so the
+  // sheet gains a column saying which draw each court belongs to.
+  const showDraw = s.format === "same";
   const headers = [
     "Court",
+    ...(showDraw ? ["Draw"] : []),
     "Team A",
     "Level",
     "vs",
@@ -196,6 +234,17 @@ export async function buildScheduleWorkbook(
     "Level Spread",
     "Team Gap",
   ];
+  const teamCols = showDraw ? [3, 6] : [2, 5]; // columns holding player names
+
+  const formatLabel =
+    FORMATS.find((f) => f.value === s.format)?.label ?? s.format;
+  const title = ws.addRow([`${formatLabel} - ${s.rounds.length} rounds`]);
+  ws.mergeCells(title.number, 1, title.number, headers.length);
+  title.getCell(1).font = { bold: true, size: 14 };
+  const sub = ws.addRow([formatSummary(s)]);
+  ws.mergeCells(sub.number, 1, sub.number, headers.length);
+  sub.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
+  ws.addRow([]);
 
   for (const rnd of s.rounds) {
     const banner = ws.addRow([`ROUND ${rnd.number}`]);
@@ -219,6 +268,7 @@ export async function buildScheduleWorkbook(
       const [b1, b2] = [s.players[m.teamB[0]].name, s.players[m.teamB[1]].name];
       const row = ws.addRow([
         courtName(m.court, courtNames),
+        ...(showDraw ? [drawLabel(m)] : []),
         `${a1} & ${a2}`,
         round2(teamLevel(s, m.teamA) / 2),
         "vs",
@@ -231,15 +281,14 @@ export async function buildScheduleWorkbook(
       row.eachCell((cell, col) => {
         cell.border = BORDER;
         cell.alignment = {
-          horizontal: col === 2 || col === 5 ? "left" : "center",
+          horizontal: teamCols.includes(col) ? "left" : "center",
           vertical: "middle",
         };
       });
     }
 
     if (rnd.byes.length) {
-      const names = rnd.byes.map((i) => s.players[i].name).join(", ");
-      const byeRow = ws.addRow([`Byes: ${names}`]);
+      const byeRow = ws.addRow([byesText(s, rnd.byes)]);
       ws.mergeCells(byeRow.number, 1, byeRow.number, headers.length);
       byeRow.getCell(1).font = { italic: true, color: { argb: "FF8A6D3B" } };
     }

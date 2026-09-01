@@ -1,64 +1,85 @@
-// Exercises the full client code path (build sample xlsx -> parse -> generate ->
-// export -> re-open) using the same lib/excel + lib/scheduler code the browser runs.
-// Self-contained synthetic data, no real people. Run: npx tsx scripts/verify_excel.mts
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { writeFile, readFile } from "node:fs/promises";
+// Round-trip the Excel export for every tournament format and re-read the
+// result to confirm the sheets are shaped correctly.
+// Run: npx tsx scripts/verify_excel.mts
 import ExcelJS from "exceljs";
+import { buildScheduleWorkbook } from "../lib/excel.ts";
+import { generateSchedule, type Format, type Player } from "../lib/scheduler.ts";
 
-import { parseRoster, buildScheduleWorkbook } from "../lib/excel.ts";
-import { generateSchedule, partnerRepeats, type Player } from "../lib/scheduler.ts";
+const LEVELS = [2.5, 3.0, 3.5, 4.0, 4.5];
+function makeRoster(men: number, women: number, seed = 3): Player[] {
+  let s = seed >>> 0;
+  const rand = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const out: Player[] = [];
+  for (let i = 0; i < men; i++)
+    out.push({ name: `Man ${i + 1}`, level: LEVELS[Math.floor(rand() * LEVELS.length)], gender: "M" });
+  for (let i = 0; i < women; i++)
+    out.push({ name: `Woman ${i + 1}`, level: LEVELS[Math.floor(rand() * LEVELS.length)], gender: "F" });
+  return out;
+}
 
-// Build a sample roster workbook shaped like a real club export: First/Last name
-// columns, a "Tournament Rating" column, and a few blank ratings to fill in.
-const sample = [
-  ["Ada", "Byte", 4.0], ["Grace", "Hopper", 3.9], ["Alan", "Turing", 3.8],
-  ["Linus", "Kernel", 3.8], ["Ken", "Unix", 3.7], ["Dennis", "Sea", 3.7],
-  ["Barbara", "Logic", 3.6], ["Edsger", "Path", 3.5], ["Donald", "Art", 3.5],
-  ["John", "Van", 3.5], ["Tim", "Web", 3.5], ["Guido", "Python", 3.5],
-  ["Margaret", "Apollo", 3.4], ["Katherine", "Orbit", 3.4], ["Radia", "Tree", 3.3],
-  ["Vint", "Packet", 3.3], ["Bjarne", "Plus", 3.2], ["Brendan", "Script", 3.1],
-  ["James", "Bean", 3.1], ["Anders", "Type", 3.1], ["Yukihiro", "Ruby", 3.0],
-  ["Rasmus", "Elephant", 3.0], ["Ida", "Blank", null], ["Hedy", "Blank", null],
-  ["Joan", "Blank", null],
-] as [string, string, number | null][];
-
-const wb0 = new ExcelJS.Workbook();
-const ws0 = wb0.addWorksheet("Sheet1");
-ws0.addRow(["First name", "Last name", "Tournament Rating"]);
-for (const [f, l, r] of sample) ws0.addRow([f, l, r]);
-const srcPath = join(tmpdir(), "sample_roster.xlsx");
-await writeFile(srcPath, Buffer.from(await wb0.xlsx.writeBuffer()));
-
-// --- parse it back via the app's parser ---
-const buf = await readFile(srcPath);
-const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-const { rows, detectedColumns } = await parseRoster(ab as ArrayBuffer);
-console.log("Detected name column(s):", detectedColumns.name, "| level column:", detectedColumns.level);
-console.log("Parsed rows:", rows.length);
-const missing = rows.filter((r) => r.level === null).map((r) => r.name);
-console.log("Missing ratings (as the UI would flag):", missing.join(", "));
-
-// fill the blanks (as a user would in the grid)
-const overrides: Record<string, number> = {
-  "Ida Blank": 3.0,
-  "Hedy Blank": 3.8,
-  "Joan Blank": 3.8,
+const COURT_NAMES = ["Shorebird 1", "Shorebird 2", "Dolphin 1", "Dolphin 2", "Preserve 1", "Preserve 2"];
+let failures = 0;
+const check = (cond: boolean, msg: string) => {
+  if (!cond) {
+    failures += 1;
+    console.error(`   FAIL: ${msg}`);
+  }
 };
-const players: Player[] = rows.map((r) => ({ name: r.name, level: r.level ?? overrides[r.name] }));
-const unfilled = players.filter((p) => p.level === undefined || Number.isNaN(p.level));
-if (unfilled.length) throw new Error("unfilled: " + unfilled.map((p) => p.name).join(", "));
 
-const s = generateSchedule(players, 5, 2026);
-console.log("\nGenerated. Repeated partnerships:", partnerRepeats(s).length);
+for (const format of ["open", "mixed", "same"] as Format[]) {
+  const players = makeRoster(13, 12);
+  const s = generateSchedule(players, { numRounds: 5, seed: 99, numCourts: 6, format });
+  const buf = await buildScheduleWorkbook(s, COURT_NAMES);
 
-const outBuf = await buildScheduleWorkbook(s);
-const outPath = join(tmpdir(), "sample_schedule.xlsx");
-await writeFile(outPath, Buffer.from(outBuf));
-console.log("Wrote", outPath, `(${outBuf.byteLength} bytes)`);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.getWorksheet("Schedule");
+  const ps = wb.getWorksheet("By Player");
+  check(!!ws, `${format}: no Schedule sheet`);
+  check(!!ps, `${format}: no By Player sheet`);
+  if (!ws || !ps) continue;
 
-// re-open to confirm the exported workbook is valid
-const wb = new ExcelJS.Workbook();
-await wb.xlsx.load(outBuf as ArrayBuffer);
-console.log("Re-opened output. Sheets:", wb.worksheets.map((w) => w.name).join(", "));
-console.log("\nFull client path OK ✓");
+  const text = (r: number, c: number) => String(ws.getRow(r).getCell(c).value ?? "");
+  const allText: string[] = [];
+  ws.eachRow((row) => row.eachCell((cell) => allText.push(String(cell.value ?? ""))));
+
+  // banner + per-round headers
+  check(text(1, 1).includes("rounds"), `${format}: missing title row`);
+  // Banner cells are merged, and ExcelJS reports the value in every cell of the
+  // merge range, so count distinct banners rather than cells.
+  const roundBanners = new Set(allText.filter((t) => t.startsWith("ROUND "))).size;
+  check(roundBanners === 5, `${format}: found ${roundBanners} round banners, expected 5`);
+
+  // every court name that played should appear
+  const courtsUsed = s.layout.courtsUsed;
+  for (let c = 1; c <= courtsUsed; c++) {
+    check(allText.includes(COURT_NAMES[c - 1]), `${format}: court "${COURT_NAMES[c - 1]}" missing`);
+  }
+
+  // Draw column only in same-gender play
+  const hasDraw = allText.includes("Draw");
+  check(hasDraw === (format === "same"), `${format}: Draw column presence wrong`);
+  if (format === "same") {
+    check(allText.includes("Men") && allText.includes("Women"), `${format}: draw labels missing`);
+  }
+
+  // every match row carries both team strings
+  const teamCells = allText.filter((t) => t.includes(" & ") && !t.startsWith("Byes")).length;
+  const expectedTeams = s.rounds.reduce((n, r) => n + r.matches.length * 2, 0);
+  check(teamCells === expectedTeams, `${format}: ${teamCells} team cells, expected ${expectedTeams}`);
+
+  // By Player sheet has one row per player plus a header
+  check(ps.rowCount === players.length + 1, `${format}: By Player has ${ps.rowCount} rows`);
+
+  const bytes = (buf as ArrayBuffer).byteLength;
+  console.log(
+    `ok  ${format.padEnd(5)} -> ${(bytes / 1024).toFixed(1)} KB, ` +
+      `${ws.rowCount} schedule rows, ${courtsUsed} courts, Draw column: ${hasDraw}`
+  );
+}
+
+if (failures) {
+  console.error(`\n${failures} check(s) FAILED`);
+  process.exit(1);
+}
+console.log("\nExcel export verified for all formats.");

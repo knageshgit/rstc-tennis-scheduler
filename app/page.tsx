@@ -5,15 +5,21 @@ import { useMemo, useRef, useState } from "react";
 import type { RosterRow } from "@/lib/excel";
 import {
   DEFAULT_COURT_NAMES,
+  FORMATS,
+  Format,
   Gender,
+  Layout,
   MAX_COURTS,
   MAX_PLAYERS,
   PLAYERS_PER_COURT,
   Player,
   Schedule,
   ScheduleError,
+  computeLayout,
   courtName,
   courtSpread,
+  drawLabel,
+  formatNeedsGender,
   generateSchedule,
   round2,
   teamGap,
@@ -30,9 +36,13 @@ function toRows(roster: RosterRow[]): Row[] {
   }));
 }
 
-function rowsToPlayers(rows: Row[]): { players?: Player[]; error?: string } {
+function rowsToPlayers(
+  rows: Row[],
+  format: Format
+): { players?: Player[]; error?: string } {
   const players: Player[] = [];
   const names = new Set<string>();
+  const noGender: string[] = [];
   for (const [i, r] of rows.entries()) {
     const name = r.name.trim();
     if (!name) continue; // ignore blank rows
@@ -42,10 +52,20 @@ function rowsToPlayers(rows: Row[]): { players?: Player[]; error?: string } {
     const lvl = Number(r.level);
     if (r.level.trim() === "" || !Number.isFinite(lvl))
       return { error: `Row ${i + 1} (${name}) needs a numeric rating.` };
+    if (!r.gender) noGender.push(name);
     players.push({ name, level: lvl, gender: r.gender });
   }
   if (players.length < PLAYERS_PER_COURT)
     return { error: `Need at least ${PLAYERS_PER_COURT} rated players.` };
+  if (formatNeedsGender(format) && noGender.length) {
+    const shown = noGender.slice(0, 6).join(", ");
+    const more = noGender.length > 6 ? ` and ${noGender.length - 6} more` : "";
+    return {
+      error:
+        `This format needs every player marked M or F. ` +
+        `Missing gender for: ${shown}${more}.`,
+    };
+  }
   return { players };
 }
 
@@ -54,6 +74,7 @@ export default function Home() {
   const [fileName, setFileName] = useState<string>("");
   const [numRounds, setNumRounds] = useState(5);
   const [numCourts, setNumCourts] = useState(MAX_COURTS);
+  const [format, setFormat] = useState<Format>("open");
   const [courtNames, setCourtNames] = useState<string[]>([...DEFAULT_COURT_NAMES]);
   const [seed, setSeed] = useState("");
   const [schedule, setSchedule] = useState<Schedule | null>(null);
@@ -71,12 +92,30 @@ export default function Home() {
   const missingCount = named.filter(
     (r) => r.level.trim() === "" || !Number.isFinite(Number(r.level))
   ).length;
-  const playing = Math.min(
-    PLAYERS_PER_COURT * Math.floor(Math.min(validCount, MAX_PLAYERS) / PLAYERS_PER_COURT),
-    numCourts * PLAYERS_PER_COURT
-  );
-  const courtsInPlay = playing / PLAYERS_PER_COURT;
-  const byesEach = Math.max(0, Math.min(validCount, MAX_PLAYERS) - playing);
+  const needsGender = formatNeedsGender(format);
+
+  // Preview how the roster maps onto courts under the selected format. This is
+  // the same calculation the engine uses, so what's shown here is what you get.
+  const preview = useMemo<{ layout?: Layout; problem?: string }>(() => {
+    const roster: Player[] = named.map((r) => ({
+      name: r.name.trim(),
+      level: Number(r.level) || 0,
+      gender: r.gender,
+    }));
+    if (roster.length < PLAYERS_PER_COURT) return {};
+    try {
+      return { layout: computeLayout(roster, numCourts, format) };
+    } catch (e) {
+      return { problem: e instanceof Error ? e.message : String(e) };
+    }
+    // `named` is rebuilt each render; key off the underlying rows instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, numCourts, format]);
+
+  const overCap = validCount > MAX_PLAYERS;
+  const layout = preview.layout;
+  const courtsInPlay = layout?.courtsUsed ?? 0;
+  const byesEach = layout?.byesPerRound ?? 0;
 
   async function onFile(file: File) {
     setError("");
@@ -109,7 +148,7 @@ export default function Home() {
   async function generate() {
     setError("");
     setSchedule(null);
-    const { players, error: verr } = rowsToPlayers(rows);
+    const { players, error: verr } = rowsToPlayers(rows, format);
     if (verr || !players) {
       setError(verr ?? "Invalid roster.");
       return;
@@ -121,7 +160,12 @@ export default function Home() {
       if (seed.trim() !== "" && !Number.isInteger(seedNum)) {
         throw new ScheduleError("Seed must be a whole number.");
       }
-      const s = generateSchedule(players, numRounds, seedNum, numCourts);
+      const s = generateSchedule(players, {
+        numRounds,
+        seed: seedNum,
+        numCourts,
+        format,
+      });
       setSchedule(s);
       setUsedCourtNames([...courtNames]); // freeze names used for this result
     } catch (e) {
@@ -225,8 +269,20 @@ export default function Home() {
           <Stat label="Players" value={String(validCount)} />
           <Stat label="Women" value={String(women)} />
           <Stat label="Men" value={String(men)} />
-          <Stat label="Unspecified" value={String(unspecified)} muted />
-          <Stat label="Courts in play" value={String(courtsInPlay)} />
+          <Stat
+            label="No gender set"
+            value={String(unspecified)}
+            muted={!needsGender || unspecified === 0}
+            warn={needsGender && unspecified > 0}
+          />
+          <Stat
+            label={
+              format === "same" && layout
+                ? `Courts (${layout.menCourts}M / ${layout.womenCourts}W)`
+                : "Courts in play"
+            }
+            value={String(courtsInPlay)}
+          />
         </section>
       )}
 
@@ -299,10 +355,24 @@ export default function Home() {
               </tbody>
             </table>
           </div>
-          {byesEach > 0 && (
+          {overCap && (
+            <p className="mt-3 text-xs text-red-600 dark:text-red-400">
+              {validCount} players exceeds the {MAX_PLAYERS}-player cap. Remove{" "}
+              {validCount - MAX_PLAYERS} to generate a schedule.
+            </p>
+          )}
+          {preview.problem && (
             <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
-              {validCount} players with {numCourts} court(s) means {byesEach} player(s) sit
-              out each round on a fair rotation ({courtsInPlay} courts in play).
+              {preview.problem}
+            </p>
+          )}
+          {layout && byesEach > 0 && (
+            <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              {validCount} players on {courtsInPlay} court(s) means {byesEach} player(s)
+              sit out each round on a fair rotation
+              {format !== "open" &&
+                ` (${layout.menByes} men, ${layout.womenByes} women)`}
+              .
             </p>
           )}
         </section>
@@ -312,6 +382,35 @@ export default function Home() {
       {rows.length > 0 && (
         <section className="mb-6 rounded-xl border border-black/10 p-5 dark:border-white/15">
           <h2 className="mb-4 font-semibold">3. Event settings</h2>
+
+          <div className="mb-5">
+            <p className="mb-2 text-sm opacity-70">Tournament format</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {FORMATS.map((f) => (
+                <button
+                  key={f.value}
+                  type="button"
+                  onClick={() => setFormat(f.value)}
+                  aria-pressed={format === f.value}
+                  className={`rounded-lg border p-3 text-left transition ${
+                    format === f.value
+                      ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40"
+                      : "border-black/15 hover:border-black/30 dark:border-white/20 dark:hover:border-white/40"
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{f.label}</span>
+                  <span className="mt-1 block text-xs opacity-60">{f.blurb}</span>
+                </button>
+              ))}
+            </div>
+            {needsGender && unspecified > 0 && (
+              <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                {unspecified} player(s) still need a gender set in the roster above
+                for this format.
+              </p>
+            )}
+          </div>
+
           <div className="flex flex-wrap gap-6">
             <label className="flex flex-col gap-1 text-sm">
               <span className="opacity-70">Courts</span>
@@ -379,9 +478,16 @@ export default function Home() {
       {schedule && metrics && (
         <section className="rounded-xl border border-black/10 p-5 dark:border-white/15">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Schedule ready - no repeated partnerships ✓
-            </h2>
+            <div>
+              <h2 className="font-semibold text-emerald-700 dark:text-emerald-400">
+                Schedule ready - no repeated partnerships ✓
+              </h2>
+              <p className="mt-1 text-xs opacity-60">
+                {FORMATS.find((f) => f.value === schedule.format)?.label}
+                {schedule.format === "same" &&
+                  ` - ${schedule.layout.menCourts} men's court(s), ${schedule.layout.womenCourts} women's court(s)`}
+              </p>
+            </div>
             <button
               onClick={download}
               className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
@@ -405,6 +511,9 @@ export default function Home() {
                     <thead className="bg-black/5 dark:bg-white/10">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium">Court</th>
+                        {schedule.format === "same" && (
+                          <th className="px-3 py-2 text-left font-medium">Draw</th>
+                        )}
                         <th className="px-3 py-2 text-left font-medium">Team A</th>
                         <th className="px-3 py-2 text-center font-medium">Lvl</th>
                         <th className="px-3 py-2 text-center font-medium"></th>
@@ -421,6 +530,19 @@ export default function Home() {
                             <td className="px-3 py-2 font-medium">
                               {courtName(m.court, usedCourtNames)}
                             </td>
+                            {schedule.format === "same" && (
+                              <td className="px-3 py-2">
+                                <span
+                                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                    m.group === "M"
+                                      ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200"
+                                      : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
+                                  }`}
+                                >
+                                  {drawLabel(m)}
+                                </span>
+                              </td>
+                            )}
                             <td className="px-3 py-2">
                               {schedule.players[m.teamA[0]].name} &amp; {schedule.players[m.teamA[1]].name}
                             </td>
@@ -444,7 +566,15 @@ export default function Home() {
                 </div>
                 {rnd.byes.length > 0 && (
                   <p className="mt-1 text-xs opacity-60">
-                    Byes: {rnd.byes.map((i) => schedule.players[i].name).join(", ")}
+                    Byes:{" "}
+                    {rnd.byes
+                      .map((i) => {
+                        const p = schedule.players[i];
+                        return schedule.format === "open" || !p.gender
+                          ? p.name
+                          : `${p.name} (${p.gender})`;
+                      })
+                      .join(", ")}
                   </p>
                 )}
               </div>
@@ -454,8 +584,9 @@ export default function Home() {
       )}
 
       <footer className="mt-10 text-center text-xs opacity-40">
-        Doubles mixer - up to {MAX_COURTS} courts, {MAX_COURTS * PLAYERS_PER_COURT} players on
-        court - courts grouped by level, unique partners every round.
+        Doubles mixer - open, mixed, or same-gender - up to {MAX_COURTS} courts,{" "}
+        {MAX_COURTS * PLAYERS_PER_COURT} players on court - courts grouped by level,
+        unique partners every round.
       </footer>
     </main>
   );
@@ -466,17 +597,21 @@ function Stat({
   value,
   big,
   muted,
+  warn,
 }: {
   label: string;
   value: string;
   big?: boolean;
   muted?: boolean;
+  warn?: boolean;
 }) {
   return (
     <div
-      className={`rounded-lg border border-black/10 p-3 text-center dark:border-white/10 ${
-        muted ? "opacity-60" : ""
-      }`}
+      className={`rounded-lg border p-3 text-center ${
+        warn
+          ? "border-amber-400 text-amber-700 dark:text-amber-300"
+          : "border-black/10 dark:border-white/10"
+      } ${muted ? "opacity-60" : ""}`}
     >
       <div className={big ? "text-2xl font-bold" : "text-xl font-bold"}>{value}</div>
       <div className="mt-1 text-xs opacity-60">{label}</div>
