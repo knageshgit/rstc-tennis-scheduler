@@ -7,7 +7,7 @@
  * two captains entering different courts at the same instant cannot lose each
  * other's entry.
  */
-import { GAMES_PER_MATCH, isValidGames, matchKey } from "@/lib/scoring";
+import { GAMES_PER_MATCH, isValidGames } from "@/lib/scoring";
 import {
   getEvent,
   getScores,
@@ -89,7 +89,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
       );
     }
 
-    await setScore(id, matchKey(round, court), clearing ? null : (games as number));
+    await setScore(id, round, court, clearing ? null : (games as number));
     const scores = await getScores(id);
     return Response.json({ ok: true, scores }, { headers: NO_STORE });
   } catch (err) {

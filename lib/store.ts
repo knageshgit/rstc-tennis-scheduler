@@ -1,28 +1,54 @@
 /**
- * Server-side storage for a published event.
+ * Server-side storage for a published event, on Vercel Blob.
  *
  * Up to this version the app was entirely local: a schedule lived in one
  * browser tab and nothing was ever sent anywhere. Score entry from several
  * phones at once needs shared state, so publishing an event writes it here and
  * every phone reads and writes the same record.
  *
- * The shape is deliberately small. An event is one immutable record (the
- * schedule, which never changes once published) plus a Redis hash of scores,
- * one field per match. Writing a score is a single HSET of one field, so two
- * captains submitting different courts at the same moment cannot overwrite
- * each other: there is no read-modify-write anywhere in this file.
+ * The interesting constraint is concurrency. A round ends and six courts report
+ * within the same few seconds, so a naive "read the scores, add mine, write
+ * them back" would drop entries: two phones both read, both write, and the
+ * second erases the first. There is no lock and no transaction available here,
+ * so the data model removes the need for one.
+ *
+ * Each score is its own blob, and the score is carried in the *pathname*:
+ *
+ *     ev/K7M2QP/s/r3c2__5__1764950400000
+ *                  ^     ^  ^
+ *                  |     |  when it was entered
+ *                  |     games won by team A ("x" if the score was cleared)
+ *                  which match
+ *
+ * Nothing is ever overwritten or deleted, so a write is a single blob upload
+ * that cannot collide with any other. Reading is a single `list` of the
+ * prefix: the pathnames alone carry every score, so no blob contents are
+ * fetched at all. Re-entering a score just adds a newer entry, and the reader
+ * keeps the latest per match, which also makes a correction from one phone win
+ * over a stale value from another.
+ *
+ * The cost of that is a few stale entries per corrected score, which is
+ * bounded by how often a human retypes a number, and worth it for writes that
+ * are correct without coordination.
  */
-import { Redis } from "@upstash/redis";
+import { get, list, put, type PutCommandOptions } from "@vercel/blob";
 
 import { MAX_COURTS, type Schedule } from "./scheduler";
-import { isValidGames, type Scores } from "./scoring";
-
-/** Events expire after this long, so old club days clean themselves up. */
-export const EVENT_TTL_SECONDS = 60 * 60 * 24 * 180; // 180 days
+import { isValidGames, matchKey, parseMatchKey, type Scores } from "./scoring";
 
 /** An unambiguous alphabet: no O/0, I/1, or similar look-alikes to mistype. */
 const ID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const ID_LENGTH = 6;
+
+/** Marks a score that was entered and then cleared again. */
+const CLEARED = "x";
+
+/** Blobs are private: the schedule carries the names of everyone playing. */
+const PUT_OPTS: PutCommandOptions = {
+  access: "private",
+  addRandomSuffix: false,
+  contentType: "application/json",
+};
 
 export interface StoredEvent {
   id: string;
@@ -32,34 +58,33 @@ export interface StoredEvent {
   schedule: Schedule;
 }
 
-let client: Redis | null = null;
-
-/** Is the Redis connection configured in this environment? */
+/** Is blob storage configured in this environment? */
 export function isStoreConfigured(): boolean {
-  return Boolean(
-    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
-  );
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
 
-/**
- * The Redis client, created on first use. Deliberately lazy: building this at
- * module scope would throw during `next build`, before the Marketplace
- * integration has injected its environment variables.
- */
-function redis(): Redis {
+export class StoreUnavailableError extends Error {}
+
+function assertConfigured(): void {
   if (!isStoreConfigured()) {
     throw new StoreUnavailableError(
       "Score sharing is not configured on this deployment."
     );
   }
-  if (!client) client = Redis.fromEnv();
-  return client;
 }
 
-export class StoreUnavailableError extends Error {}
+const eventPath = (id: string) => `ev/${id}/event.json`;
+export const scorePrefix = (id: string) => `ev/${id}/s/`;
 
-const eventKey = (id: string) => `ev:${id}`;
-const scoresKey = (id: string) => `ev:${id}:scores`;
+/** Build the blob pathname that encodes one score entry. Exported for tests. */
+export function scorePath(
+  id: string,
+  key: string,
+  games: number | null,
+  at: number
+): string {
+  return `${scorePrefix(id)}${key}__${games === null ? CLEARED : games}__${at}`;
+}
 
 /** A short, human-readable, hard-to-guess event code. */
 export function newEventId(): string {
@@ -134,67 +159,116 @@ export async function createEvent(
   courtNames: string[],
   schedule: Schedule
 ): Promise<StoredEvent> {
-  const r = redis();
-  // Retry on the vanishingly unlikely collision rather than clobber an event.
+  assertConfigured();
+  // `put` refuses to overwrite by default, so a colliding code throws rather
+  // than quietly replacing somebody else's event.
   for (let attempt = 0; attempt < 5; attempt++) {
-    const id = newEventId();
     const ev: StoredEvent = {
-      id,
+      id: newEventId(),
       createdAt: Date.now(),
       title,
       courtNames,
       schedule,
     };
-    const ok = await r.set(eventKey(id), JSON.stringify(ev), {
-      nx: true,
-      ex: EVENT_TTL_SECONDS,
-    });
-    if (ok) return ev;
+    try {
+      await put(eventPath(ev.id), JSON.stringify(ev), PUT_OPTS);
+      return ev;
+    } catch {
+      // Almost certainly a pathname collision; try another code.
+    }
   }
   throw new Error("Could not allocate an event code; please try again.");
 }
 
 export async function getEvent(id: string): Promise<StoredEvent | null> {
-  const raw = await redis().get(eventKey(id));
-  if (raw === null || raw === undefined) return null;
-  // Upstash parses JSON responses automatically, but a plain string can come
-  // back when the value was written by an older client. Handle both.
-  if (typeof raw === "string") {
-    try {
-      return JSON.parse(raw) as StoredEvent;
-    } catch {
-      return null;
-    }
+  assertConfigured();
+  try {
+    // Private blobs are not fetchable by URL; `get` carries the credentials.
+    // The record never changes once published, so serving it from cache is
+    // exactly what we want.
+    const res = await get(eventPath(id), { access: "private", useCache: true });
+    if (!res || res.statusCode !== 200 || !res.stream) return null;
+    const text = await new Response(res.stream).text();
+    return JSON.parse(text) as StoredEvent;
+  } catch {
+    return null; // No such event, or an unreadable one.
   }
-  return raw as StoredEvent;
 }
 
+/** One parsed score entry, as recovered from a blob pathname. */
+export interface Entry {
+  key: string;
+  games: number | null;
+  at: number;
+}
+
+/** Recover a score entry from its pathname, or null if it is not one. */
+export function parseEntry(pathname: string, id: string): Entry | null {
+  const tail = pathname.slice(scorePrefix(id).length);
+  const parts = tail.split("__");
+  if (parts.length !== 3) return null;
+  const [key, rawGames, rawAt] = parts;
+  if (!parseMatchKey(key)) return null;
+  const at = Number(rawAt);
+  if (!Number.isFinite(at)) return null;
+  if (rawGames === CLEARED) return { key, games: null, at };
+  const games = Number(rawGames);
+  if (!isValidGames(games)) return null;
+  return { key, games, at };
+}
+
+/**
+ * Every score currently standing. One `list` call: the pathnames carry the
+ * values, so no blob content is fetched.
+ */
 export async function getScores(id: string): Promise<Scores> {
-  const raw = await redis().hgetall<Record<string, unknown>>(scoresKey(id));
+  assertConfigured();
+  const prefix = scorePrefix(id);
+  const entries: Entry[] = [];
+
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, limit: 1000, cursor });
+    for (const blob of page.blobs) {
+      const entry = parseEntry(blob.pathname, id);
+      if (entry) entries.push(entry);
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+
+  return foldEntries(entries);
+}
+
+/**
+ * Reduce every entry ever written for an event to the scores standing now:
+ * the newest entry per match wins, and one that cleared a score leaves the
+ * match unscored rather than scored zero. Pure, so it can be tested directly.
+ */
+export function foldEntries(entries: Entry[]): Scores {
+  const latest = new Map<string, Entry>();
+  for (const entry of entries) {
+    const seen = latest.get(entry.key);
+    if (!seen || entry.at >= seen.at) latest.set(entry.key, entry);
+  }
   const out: Scores = {};
-  if (!raw) return out;
-  for (const [k, v] of Object.entries(raw)) {
-    const n = typeof v === "number" ? v : Number(v);
-    // Anything unparsable is dropped rather than surfaced as a 0, which would
-    // silently read as "this match finished 0-8".
-    if (isValidGames(n)) out[k] = n;
+  for (const [key, entry] of latest) {
+    if (entry.games !== null) out[key] = entry.games;
   }
   return out;
 }
 
 /**
  * Record team A's games for one match, or clear it when `games` is null.
- * One field, one write: concurrent entries for different courts never collide.
+ * A single upload to a pathname nothing else will ever use, so simultaneous
+ * entries from different courts cannot interfere with each other.
  */
 export async function setScore(
   id: string,
-  key: string,
+  round: number,
+  court: number,
   games: number | null
 ): Promise<void> {
-  const r = redis();
-  if (games === null) await r.hdel(scoresKey(id), key);
-  else await r.hset(scoresKey(id), { [key]: games });
-  // Keep the scores alive as long as the event itself.
-  await r.expire(scoresKey(id), EVENT_TTL_SECONDS);
-  await r.expire(eventKey(id), EVENT_TTL_SECONDS);
+  assertConfigured();
+  const key = matchKey(round, court);
+  await put(scorePath(id, key, games, Date.now()), "{}", PUT_OPTS);
 }

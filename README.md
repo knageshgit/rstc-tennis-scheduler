@@ -40,8 +40,10 @@ to the format, not a scheduling failure.
 
 ## Web app (Next.js): this is what deploys
 
-Everything runs client-side in the browser (no server, no data leaves the page),
-which is why it hosts cleanly on Vercel as a static app.
+Building a schedule runs entirely client-side: upload, edit, generate and download
+all happen in the browser and nothing is sent anywhere. The one exception is
+**Publish for scoring** (below), which is an explicit button press and the only
+thing that ever puts a schedule on a server.
 
 ```bash
 npm install
@@ -62,14 +64,79 @@ court level spread, and team gap, plus a **Draw** column marking the men's and w
 courts in same-gender play) and a **By Player** sheet (partners, opponents, matches,
 byes).
 
+## Scoring and the leaderboard
+
+Every match is **8 games**. A player's score for a match is the number of games their
+team won, so the two teams on a court always split 8 between them. Totals are ranked
+in three tables over that one set of numbers: **Open** (everyone), **Men**, and
+**Women**.
+
+Ranking is on **total games won**. Where the roster does not divide evenly into
+courts, some players sit out a round and so have one fewer match in which to win
+games, so every table also carries **matches played** and **games per match**: the
+rank follows the total, and the average is there to show when a bye is the reason
+someone sits lower than their play deserved.
+
+### Running it on the day
+1. Generate the schedule, then press **Publish for scoring**. You get a six-character
+   code and a link, e.g. `/e/K7M2QP`.
+2. Share the link with the courts. Anyone who opens it can enter a result and see the
+   leaderboard; there are no logins. Each phone can filter to a single court, and that
+   choice is remembered on that device.
+3. Enter the games for either team from a 0-8 picker; the other side fills in
+   automatically. Entries save immediately and every phone refreshes every 10 seconds.
+4. **Download results as Excel** from the scoreboard at any point.
+
+The scored workbook is the same file, not a second one: the schedule sheet gains
+**Games** columns with the winning side in bold and unscored matches called out, the
+By Player sheet gains a games total, and a **Leaderboard** sheet holds the three
+ranked tables.
+
+### How score storage works
+
+Score entry is the one feature that needs a server. It uses a private **Vercel Blob**
+store (`BLOB_READ_WRITE_TOKEN`, injected by `vercel blob create-store`). The store is
+private because a published schedule carries the name of everyone playing.
+
+The design point worth knowing is concurrency. A round ends and six courts report
+within seconds of each other, so the obvious "read the scores, add mine, write them
+back" would silently drop entries. Instead **each score is its own blob, with the
+value in the pathname**:
+
+```
+ev/K7M2QP/s/r3c2__5__1764950400000
+             |     |  when it was entered
+             |     games won by team A ("x" if the score was cleared)
+             which match
+```
+
+Nothing is ever overwritten or deleted, so a write is one upload that cannot collide
+with any other, and a read is a single `list` of the prefix (the pathnames carry the
+data, so no blob contents are fetched). Re-entering a score appends a newer entry and
+the reader keeps the latest per match, which also means a correction beats a stale
+value arriving late from another phone. `scripts/verify_store.mts` covers that round
+trip and the last-write-wins rule.
+
+Without `BLOB_READ_WRITE_TOKEN` everything else still works and publishing returns a
+plain "not configured" message rather than failing.
+
 ### Project layout
 | Path | Purpose |
 |------|---------|
-| `app/page.tsx` | The whole UI: upload → edit → generate → download. |
+| `app/page.tsx` | The organiser UI: roster → generate → download → publish. |
+| `app/e/[id]/` | The scoreboard phones open: score entry and the leaderboard. |
+| `app/api/events/` | Publish an event, read it, and record one match's score. |
 | `lib/scheduler.ts` | Scheduling/optimization engine (randomized restarts). |
-| `lib/excel.ts` | Excel parsing and styled schedule export (ExcelJS). |
+| `lib/scoring.ts` | Games tally and the Open/Men/Women rankings (pure, no I/O). |
+| `lib/store.ts` | Event storage on Vercel Blob, and the guard on what may be stored. |
+| `lib/roster.ts` | Parses a pasted player list for manual roster entry. |
+| `lib/excel.ts` | Excel parsing and styled schedule/results export (ExcelJS). |
 | `scripts/verify.mts` | Engine checks across all three formats and a dozen roster shapes, plus expected-failure cases. |
-| `scripts/verify_excel.mts` | Round-trips the exported workbook for each format and re-reads it. |
+| `scripts/verify_excel.mts` | Round-trips the exported workbook for each format, scored and unscored. |
+| `scripts/verify_scoring.mts` | Tally and ranking checks, including byes, ties and half-scored events. |
+| `scripts/verify_store.mts` | Event codes and the schedule shape guard. |
+| `scripts/verify_travel.mts` | Asserts travel polish never costs schedule quality. |
+| `scripts/verify_roster.mts` | The pasted-list parser. |
 | `python/` | The original Python/Streamlit version (see below). Excluded from the Vercel build. |
 
 ## Python version (`python/`)
@@ -104,7 +171,14 @@ The format changes how courts are formed and which team splits are legal:
   the level order and filled from the nearest players whose gender slot is still open,
   giving 2 men + 2 women per court. Only the two man/woman splits are candidates.
 
-Run the checks with `npx tsx scripts/verify.mts` and `npx tsx scripts/verify_excel.mts`.
+Run every check before deploying:
+
+```bash
+for f in verify verify_excel verify_roster verify_travel verify_scoring verify_store; do
+  npx tsx scripts/$f.mts || break
+done
+npm run lint && npm run build
+```
 
 ## Notes on roster size
 - **24 players** fills all 6 courts every round with no byes.
