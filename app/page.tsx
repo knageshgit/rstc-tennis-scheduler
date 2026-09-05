@@ -21,9 +21,12 @@ import {
   drawLabel,
   formatNeedsGender,
   generateSchedule,
+  playerStats,
   round2,
   teamGap,
   teamLevel,
+  travelSummary,
+  venueOf,
 } from "@/lib/scheduler";
 import { parseBulkRoster, type Row } from "@/lib/roster";
 
@@ -120,6 +123,23 @@ export default function Home() {
   }, [rows, numCourts, format]);
 
   const bulkCount = useMemo(() => parseBulkRoster(bulkText).length, [bulkText]);
+
+  // Courts sharing a name stem are treated as one venue, so players can be kept
+  // there. "Shorebird 1" and "Shorebird 2" are one venue; "Dolphin 1" is not.
+  const venueGroups = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (let i = 0; i < numCourts; i++) {
+      const name = courtName(i + 1, courtNames);
+      const key = venueOf(name);
+      groups.set(key, [...(groups.get(key) ?? []), name]);
+    }
+    return [...groups.values()];
+  }, [courtNames, numCourts]);
+
+  const travel = useMemo(
+    () => (schedule ? travelSummary(schedule) : null),
+    [schedule]
+  );
 
   const overCap = validCount > MAX_PLAYERS;
   const layout = preview.layout;
@@ -243,6 +263,7 @@ export default function Home() {
         seed: seedNum,
         numCourts,
         format,
+        courtNames, // decides which courts share a venue
       });
       setSchedule(s);
       setUsedCourtNames([...courtNames]); // freeze names used for this result
@@ -504,7 +525,7 @@ export default function Home() {
           </div>
           <div className="max-h-96 overflow-auto rounded-lg border border-black/10 dark:border-white/10">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-black/5 dark:bg-white/10">
+              <thead className="sticky top-0 bg-neutral-100 dark:bg-neutral-800">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">#</th>
                   <th className="px-3 py-2 text-left font-medium">Name</th>
@@ -669,6 +690,22 @@ export default function Home() {
                 </label>
               ))}
             </div>
+            <p className="mt-2 text-xs opacity-60">
+              {venueGroups.length > 1 ? (
+                <>
+                  Read as {venueGroups.length} venues:{" "}
+                  {venueGroups.map((g) => g.join(" + ")).join(", ")}. Courts that share
+                  a name are treated as walkable; the schedule keeps players at one
+                  venue as much as it can without changing who they play.
+                </>
+              ) : (
+                <>
+                  All {numCourts} courts read as one venue, so only court changes are
+                  minimised. Give courts names like &quot;Shorebird 1&quot; and
+                  &quot;Dolphin 1&quot; if they are far apart.
+                </>
+              )}
+            </p>
           </div>
 
           <button
@@ -703,11 +740,35 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="mb-6 grid grid-cols-3 gap-3">
+          <div className="mb-3 grid grid-cols-3 gap-3">
             <Stat label="Avg court spread" value={metrics.spread} big />
             <Stat label="Avg team gap" value={metrics.gap} big />
             <Stat label="Widest court" value={metrics.maxSpread} big />
           </div>
+
+          {travel && (
+            <div className="mb-6">
+              <div className="grid grid-cols-3 gap-3">
+                <Stat
+                  label="Stay on the same court"
+                  value={`${Math.round((100 * travel.stays) / Math.max(1, travel.transitions))}%`}
+                  big
+                />
+                <Stat label="Venue changes, all players" value={String(travel.drives)} big />
+                <Stat
+                  label="Never change venue"
+                  value={`${travel.neverDrive}/${schedule.players.length}`}
+                  big
+                />
+              </div>
+              <p className="mt-2 text-xs opacity-60">
+                Of {travel.transitions} moves between matches, {travel.stays} keep the
+                player on the same court, {travel.walks} are a walk to the other court
+                at the same venue and {travel.drives} cross venues. Court assignment
+                does not affect who plays whom, so this costs nothing in match quality.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-6">
             {schedule.rounds.map((rnd) => (
@@ -787,6 +848,60 @@ export default function Home() {
               </div>
             ))}
           </div>
+          <details className="mt-8 rounded-lg border border-black/10 p-4 dark:border-white/10">
+            <summary className="cursor-pointer text-sm font-medium">
+              Where each player goes
+            </summary>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-black/5 dark:bg-white/10">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Player</th>
+                    {schedule.rounds.map((r) => (
+                      <th key={r.number} className="px-3 py-2 text-left font-medium">
+                        R{r.number}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {playerStats(schedule)
+                    .slice()
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((st) => {
+                      const trail = st.courtsByRound;
+                      return (
+                        <tr key={st.name} className="border-t border-black/5 dark:border-white/5">
+                          <td className="px-3 py-1.5 font-medium">{st.name}</td>
+                          {trail.map((c, i) => {
+                            const prev = trail.slice(0, i).filter((x) => x !== null).pop();
+                            const same = c !== null && c === prev;
+                            return (
+                              <td
+                                key={i}
+                                className={`px-3 py-1.5 ${
+                                  c === null
+                                    ? "opacity-40"
+                                    : same
+                                      ? "opacity-60"
+                                      : "font-medium"
+                                }`}
+                              >
+                                {c === null ? "bye" : courtName(c, usedCourtNames)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs opacity-50">
+              Bold marks a court change from the player&apos;s previous match. The same
+              table is in the Excel download, on the By Player sheet.
+            </p>
+          </details>
         </section>
       )}
 

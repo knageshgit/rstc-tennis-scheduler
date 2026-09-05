@@ -114,8 +114,12 @@ export interface Schedule {
   players: Player[];
   rounds: Round[];
   cost: number;
+  /** Total travel cost of the court assignment; see optimizeCourts. */
+  travel: number;
   format: Format;
   layout: Layout;
+  /** Court names the travel optimisation was done against. */
+  courtNames: string[];
 }
 
 export interface ScheduleOptions {
@@ -124,6 +128,14 @@ export interface ScheduleOptions {
   numCourts?: number;
   format?: Format;
   restarts?: number;
+  /** Court names, used to work out which courts share a venue. */
+  courtNames?: string[];
+  /**
+   * Minimise how far players travel between rounds (default true). Set false
+   * to get the pre-v4 behaviour, where a court number was just a group's rank
+   * by rating; the verification scripts use it as a baseline.
+   */
+  travelPolish?: boolean;
 }
 
 export interface PlayerStat {
@@ -134,6 +146,8 @@ export interface PlayerStat {
   byes: number;
   partners: string[];
   opponents: string[];
+  /** Court played each round, 1-indexed; null for a bye. */
+  courtsByRound: (number | null)[];
 }
 
 export class ScheduleError extends Error {}
@@ -492,6 +506,295 @@ function scheduleCost(players: Player[], rounds: Round[]): number {
   return cost;
 }
 
+// ---- travel between courts -------------------------------------------------
+/**
+ * The venue a court sits at, derived from its name by dropping a trailing
+ * number: "Shorebird 1" and "Shorebird 2" are both at "Shorebird", while
+ * "Dolphin 1" is somewhere else entirely. Courts named without a number, or a
+ * whole facility named "Court 1".."Court 6", collapse to one venue, which is
+ * the right answer for a club whose courts are all side by side.
+ */
+export function venueOf(name: string): string {
+  const trimmed = (name ?? "").trim();
+  const stripped = trimmed.replace(/[\s#\-_.]*\d+\s*$/, "").trim();
+  return (stripped || trimmed).toLowerCase();
+}
+
+/** What it costs a player to move between two courts for their next match. */
+export const STAY_COST = 0; // same court again
+export const WALK_COST = 1; // the other court at the same venue
+export const DRIVE_COST = 12; // a different venue: not walkable
+
+/** Square matrix of move costs between the courts in play (0-indexed). */
+function travelWeights(courtNames: string[], courts: number): number[][] {
+  const venues = Array.from({ length: courts }, (_, i) =>
+    venueOf(courtName(i + 1, courtNames))
+  );
+  return venues.map((va, a) =>
+    venues.map((vb, b) => {
+      if (a === b) return STAY_COST;
+      return va === vb ? WALK_COST : DRIVE_COST;
+    })
+  );
+}
+
+const permCache = new Map<number, number[][]>();
+function permutations(n: number): number[][] {
+  const hit = permCache.get(n);
+  if (hit) return hit;
+  const out: number[][] = [];
+  const cur: number[] = [];
+  const used = new Array(n).fill(false);
+  const rec = () => {
+    if (cur.length === n) {
+      out.push([...cur]);
+      return;
+    }
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      used[i] = true;
+      cur.push(i);
+      rec();
+      cur.pop();
+      used[i] = false;
+    }
+  };
+  rec();
+  permCache.set(n, out);
+  return out;
+}
+
+/** Exact minimum-cost assignment of k groups to k courts. k is at most 6. */
+function bestAssignment(cost: number[][]): number[] {
+  const k = cost.length;
+  let bestPerm = cost.map((_, i) => i);
+  let bestCost = Infinity;
+  for (const perm of permutations(k)) {
+    let c = 0;
+    for (let g = 0; g < k; g++) c += cost[g][perm[g]];
+    if (c < bestCost) {
+      bestCost = c;
+      bestPerm = perm;
+    }
+  }
+  return bestPerm;
+}
+
+/**
+ * Renumber each round's courts so players move as little as possible between
+ * rounds, preferring to leave them on the court they are already standing on
+ * and, failing that, at the venue they are already at.
+ *
+ * This costs nothing in match quality. Which physical court a given four
+ * players use has no bearing on who they play or how close their ratings are,
+ * so the level grouping, the partner history and the schedule cost are all
+ * untouched; only the court label attached to each match changes.
+ *
+ * A forward pass places each round against where players already are, then
+ * optional sweeps re-place each round against both its neighbours. Mutates
+ * `rounds` and returns the total travel cost.
+ */
+function optimizeCourts(rounds: Round[], w: number[][], sweeps: number): number {
+  const R = rounds.length;
+  if (R === 0) return 0;
+
+  // assign[r][g] = 0-indexed court given to round r's group g. Starts from the
+  // courts the rounds already carry, so this can only ever improve on them.
+  const assign: number[][] = rounds.map((rnd) => rnd.matches.map((m) => m.court - 1));
+  // at[r] = player -> court index for round r (players on a bye are absent).
+  const at: Map<number, number>[] = rounds.map(() => new Map());
+  const place = (r: number) => {
+    const m = new Map<number, number>();
+    rounds[r].matches.forEach((match, g) => {
+      for (const p of allIndices(match)) m.set(p, assign[r][g]);
+    });
+    at[r] = m;
+  };
+  for (let r = 0; r < R; r++) place(r);
+
+  // The court a player last used before round r, and next uses after it, so a
+  // bye does not lose their place.
+  const before = (p: number, r: number): number => {
+    for (let q = r - 1; q >= 0; q--) {
+      const c = at[q].get(p);
+      if (c !== undefined) return c;
+    }
+    return -1;
+  };
+  const after = (p: number, r: number): number => {
+    for (let q = r + 1; q < R; q++) {
+      const c = at[q].get(p);
+      if (c !== undefined) return c;
+    }
+    return -1;
+  };
+
+  const solveRound = (r: number, useNext: boolean) => {
+    const k = rounds[r].matches.length;
+    if (k === 0) return;
+    const cost = rounds[r].matches.map((match) => {
+      const row = new Array<number>(k).fill(0);
+      for (const p of allIndices(match)) {
+        const prev = before(p, r);
+        const next = useNext ? after(p, r) : -1;
+        for (let c = 0; c < k; c++) {
+          if (prev >= 0) row[c] += w[prev][c];
+          if (next >= 0) row[c] += w[c][next];
+        }
+      }
+      return row;
+    });
+    assign[r] = bestAssignment(cost);
+    place(r);
+  };
+
+  const total = (): number => {
+    let t = 0;
+    const last = new Map<number, number>();
+    for (let r = 0; r < R; r++) {
+      for (const [p, c] of at[r]) {
+        const prev = last.get(p);
+        if (prev !== undefined) t += w[prev][c];
+        last.set(p, c);
+      }
+    }
+    return t;
+  };
+
+  // A greedy pass, and each sweep after it, is a heuristic that can overshoot,
+  // so keep the best arrangement seen rather than whatever the last pass left.
+  let bestTotal = total();
+  let bestAssign = assign.map((row) => [...row]);
+  const keepIfBetter = () => {
+    const t = total();
+    if (t < bestTotal) {
+      bestTotal = t;
+      bestAssign = assign.map((row) => [...row]);
+      return true;
+    }
+    return false;
+  };
+
+  for (let r = 0; r < R; r++) solveRound(r, false);
+  keepIfBetter();
+  for (let i = 0; i < sweeps; i++) {
+    for (let r = 0; r < R; r++) solveRound(r, true);
+    if (!keepIfBetter()) break; // converged, or drifting the wrong way
+  }
+
+  for (let r = 0; r < R; r++) {
+    rounds[r].matches.forEach((match, g) => {
+      match.court = bestAssign[r][g] + 1;
+    });
+  }
+  return bestTotal;
+}
+
+/** Total travel cost of a schedule as its courts currently stand. */
+function totalTravel(rounds: Round[], w: number[][]): number {
+  let t = 0;
+  const last = new Map<number, number>();
+  for (const rnd of rounds) {
+    for (const m of rnd.matches) {
+      for (const p of allIndices(m)) {
+        const prev = last.get(p);
+        if (prev !== undefined) t += w[prev][m.court - 1];
+        last.set(p, m.court - 1);
+      }
+    }
+  }
+  return t;
+}
+
+/**
+ * Swap equally rated players between courts within a round whenever it
+ * shortens somebody's trip.
+ *
+ * Two players on the same rating are interchangeable as far as the objective
+ * is concerned: after the swap every court holds the same multiset of ratings
+ * it held before, so court spread and team gap - and therefore the schedule
+ * cost - come out bit for bit identical. That makes this a free way to leave
+ * people on the court they are already standing on. Swaps that would repeat a
+ * partnership, or break a format's gender rule, are rejected.
+ *
+ * Mutates `s.rounds` and returns the travel cost it settled on.
+ */
+function reduceTravelBySwaps(s: Schedule, w: number[][], passes: number): number {
+  const { players, rounds, format } = s;
+  const key = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+  const pairCount = new Map<string, number>();
+  const bump = (a: number, b: number, d: number) => {
+    const k = key(a, b);
+    pairCount.set(k, (pairCount.get(k) ?? 0) + d);
+  };
+  for (const rnd of rounds) {
+    for (const m of rnd.matches) {
+      bump(m.teamA[0], m.teamA[1], 1);
+      bump(m.teamB[0], m.teamB[1], 1);
+    }
+  }
+
+  type Slot = { mi: number; team: "teamA" | "teamB"; si: number };
+  const locate = (rnd: Round): Map<number, Slot> => {
+    const at = new Map<number, Slot>();
+    rnd.matches.forEach((m, mi) => {
+      for (const team of ["teamA", "teamB"] as const) {
+        m[team].forEach((p, si) => at.set(p, { mi, team, si }));
+      }
+    });
+    return at;
+  };
+
+  let best = totalTravel(rounds, w);
+  for (let pass = 0; pass < passes; pass++) {
+    let improved = false;
+    for (const rnd of rounds) {
+      const at = locate(rnd);
+      const onCourt = [...at.keys()];
+      for (let x = 0; x < onCourt.length; x++) {
+        for (let y = x + 1; y < onCourt.length; y++) {
+          const p = onCourt[x];
+          const q = onCourt[y];
+          if (players[p].level !== players[q].level) continue;
+          // Gendered formats fix how many men and women each court holds, so
+          // only a like-for-like swap keeps the court legal.
+          if (format !== "open" && players[p].gender !== players[q].gender) continue;
+          const sp = at.get(p) as Slot;
+          const sq = at.get(q) as Slot;
+          if (sp.mi === sq.mi) continue; // same court: nobody travels differently
+
+          const mp = rnd.matches[sp.mi];
+          const mq = rnd.matches[sq.mi];
+          const partnerOfP = mp[sp.team][1 - sp.si];
+          const partnerOfQ = mq[sq.team][1 - sq.si];
+          // The swap would create these two teams; neither may already exist.
+          if ((pairCount.get(key(q, partnerOfP)) ?? 0) > 0) continue;
+          if ((pairCount.get(key(p, partnerOfQ)) ?? 0) > 0) continue;
+
+          mp[sp.team][sp.si] = q;
+          mq[sq.team][sq.si] = p;
+          const t = totalTravel(rounds, w);
+          if (t < best) {
+            best = t;
+            improved = true;
+            bump(p, partnerOfP, -1);
+            bump(q, partnerOfQ, -1);
+            bump(q, partnerOfP, 1);
+            bump(p, partnerOfQ, 1);
+            at.set(p, sq);
+            at.set(q, sp);
+          } else {
+            mp[sp.team][sp.si] = p;
+            mq[sq.team][sq.si] = q;
+          }
+        }
+      }
+    }
+    if (!improved) break;
+  }
+  return best;
+}
+
 // ---- public API ------------------------------------------------------------
 export function generateSchedule(
   players: Player[],
@@ -503,6 +806,8 @@ export function generateSchedule(
     numCourts = MAX_COURTS,
     format = "open",
     restarts = 6000,
+    courtNames = DEFAULT_COURT_NAMES,
+    travelPolish = true,
   } = opts;
 
   const n = players.length;
@@ -533,6 +838,7 @@ export function generateSchedule(
   const menIdx = allIdx.filter((i) => players[i].gender === "M");
   const womenIdx = allIdx.filter((i) => players[i].gender === "F");
 
+  const weights = travelWeights(courtNames, layout.courtsUsed);
   const masterRng = makeRng(seed ?? Math.floor(Math.random() * 2 ** 31));
   let best: Schedule | null = null;
 
@@ -587,15 +893,48 @@ export function generateSchedule(
     if (failed) continue;
 
     const cost = scheduleCost(players, rounds);
-    if (best === null || cost < best.cost) {
-      best = { players, rounds, cost, format, layout };
-      if (cost === 0) break;
+    if (best !== null && cost > best.cost) continue; // worse matches; never trade quality
+    // Same match quality: settle it on how far players have to walk or drive.
+    // A single forward pass keeps the inner loop cheap; the winner gets the
+    // full treatment once the search is over.
+    const travel = travelPolish ? optimizeCourts(rounds, weights, 0) : 0;
+    if (best === null || cost < best.cost || travel < best.travel) {
+      best = { players, rounds, cost, travel, format, layout, courtNames };
+      if (cost === 0 && travel === 0) break;
     }
   }
 
   if (best === null) {
     throw new ScheduleError(
       "Could not build a schedule without repeating partners. Try fewer rounds or a different roster size."
+    );
+  }
+
+  // Travel polish on the winner only. Neither step may change match quality:
+  // swaps preserve every court's ratings, and re-lettering courts cannot touch
+  // who plays whom. The cost is re-checked below to keep that honest.
+  let travel = travelPolish ? optimizeCourts(best.rounds, weights, 4) : totalTravel(best.rounds, weights);
+  for (let i = 0; travelPolish && i < 4; i++) {
+    reduceTravelBySwaps(best, weights, 4);
+    const t = optimizeCourts(best.rounds, weights, 4);
+    if (t >= travel) {
+      travel = Math.min(travel, t);
+      break;
+    }
+    travel = t;
+  }
+  best.travel = totalTravel(best.rounds, weights);
+  if (best.travel > travel) {
+    throw new ScheduleError(
+      `Internal error: travel polish reported ${travel} but left ${best.travel}.`
+    );
+  }
+
+  const finalCost = scheduleCost(players, best.rounds);
+  if (finalCost !== best.cost) {
+    throw new ScheduleError(
+      `Internal error: travel optimisation changed match quality ` +
+        `(${best.cost} -> ${finalCost}).`
     );
   }
 
@@ -655,21 +994,25 @@ export function playerStats(s: Schedule): PlayerStat[] {
   return s.players.map((p, idx) => {
     const partners: string[] = [];
     const opponents: string[] = [];
+    const courtsByRound: (number | null)[] = [];
     let matches = 0;
     let byes = 0;
     for (const rnd of s.rounds) {
       if (rnd.byes.includes(idx)) byes += 1;
+      let playedOn: number | null = null;
       for (const m of rnd.matches) {
         const inA = m.teamA.includes(idx);
         const inB = m.teamB.includes(idx);
         if (inA || inB) {
           matches += 1;
+          playedOn = m.court;
           const team = inA ? m.teamA : m.teamB;
           const other = inA ? m.teamB : m.teamA;
           for (const j of team) if (j !== idx) partners.push(s.players[j].name);
           for (const j of other) opponents.push(s.players[j].name);
         }
       }
+      courtsByRound.push(playedOn);
     }
     return {
       name: p.name,
@@ -679,8 +1022,86 @@ export function playerStats(s: Schedule): PlayerStat[] {
       byes,
       partners,
       opponents,
+      courtsByRound,
     };
   });
+}
+
+/** How much moving around the finished schedule asks of the players. */
+export interface TravelSummary {
+  /** Court-to-court transitions across the whole event (byes bridged over). */
+  transitions: number;
+  /** Transitions where the player stayed on the same court. */
+  stays: number;
+  /** Transitions to the other court at the same venue. */
+  walks: number;
+  /** Transitions to a different venue: the ones worth avoiding. */
+  drives: number;
+  /** Players who never leave the court they started on. */
+  neverMove: number;
+  /** Players who never have to change venue. */
+  neverDrive: number;
+  /** Average venue changes per player. */
+  drivesPerPlayer: number;
+  /** Venue name for each court in play, in court order. */
+  venues: string[];
+}
+
+export function travelSummary(s: Schedule): TravelSummary {
+  const names = s.courtNames ?? DEFAULT_COURT_NAMES;
+  const venues = Array.from({ length: s.layout.courtsUsed }, (_, i) =>
+    courtName(i + 1, names)
+  );
+  const venueKey = venues.map(venueOf);
+
+  // The courts each player used, in round order, byes skipped.
+  const trail: number[][] = s.players.map(() => []);
+  for (const rnd of s.rounds) {
+    for (const m of rnd.matches) {
+      for (const p of [m.teamA[0], m.teamA[1], m.teamB[0], m.teamB[1]]) {
+        trail[p].push(m.court - 1);
+      }
+    }
+  }
+
+  let transitions = 0;
+  let stays = 0;
+  let walks = 0;
+  let drives = 0;
+  let neverMove = 0;
+  let neverDrive = 0;
+  for (const courts of trail) {
+    if (courts.length === 0) continue;
+    let moved = false;
+    let drove = false;
+    for (let i = 1; i < courts.length; i++) {
+      const a = courts[i - 1];
+      const b = courts[i];
+      transitions += 1;
+      if (a === b) stays += 1;
+      else if (venueKey[a] === venueKey[b]) {
+        walks += 1;
+        moved = true;
+      } else {
+        drives += 1;
+        moved = true;
+        drove = true;
+      }
+    }
+    if (!moved) neverMove += 1;
+    if (!drove) neverDrive += 1;
+  }
+
+  return {
+    transitions,
+    stays,
+    walks,
+    drives,
+    neverMove,
+    neverDrive,
+    drivesPerPlayer: s.players.length ? drives / s.players.length : 0,
+    venues: venueKey,
+  };
 }
 
 export function round2(x: number): number {

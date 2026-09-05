@@ -11,6 +11,7 @@ import {
   courtAvg,
   courtName,
   courtSpread,
+  travelSummary,
   drawLabel,
   playerStats,
   round2,
@@ -244,6 +245,17 @@ export async function buildScheduleWorkbook(
   const sub = ws.addRow([formatSummary(s)]);
   ws.mergeCells(sub.number, 1, sub.number, headers.length);
   sub.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
+  const t = travelSummary(s);
+  const venues = [...new Set(t.venues)];
+  const travelLine = ws.addRow([
+    `Courts are grouped to keep players put: ` +
+      `${t.stays} of ${t.transitions} times a player stays on the same court, ` +
+      `${t.walks} are a walk within a venue and ${t.drives} cross venues. ` +
+      `${t.neverDrive} of ${s.players.length} players never change venue` +
+      (venues.length > 1 ? ` (${venues.length} venues in play).` : `.`),
+  ]);
+  ws.mergeCells(travelLine.number, 1, travelLine.number, headers.length);
+  travelLine.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
   ws.addRow([]);
 
   for (const rnd of s.rounds) {
@@ -299,7 +311,16 @@ export async function buildScheduleWorkbook(
 
   // --- By Player sheet ---
   const ps = wb.addWorksheet("By Player");
-  const pHeaders = ["Player", "Level", "Gender", "Matches", "Byes", "Partners", "Opponents"];
+  const pHeaders = [
+    "Player",
+    "Level",
+    "Gender",
+    "Matches",
+    "Byes",
+    "Where to be (by round)",
+    "Partners",
+    "Opponents",
+  ];
   const ph = ps.addRow(pHeaders);
   ph.eachCell((cell) => {
     cell.fill = HEADER_FILL;
@@ -317,6 +338,9 @@ export async function buildScheduleWorkbook(
       st.gender,
       st.matches,
       st.byes,
+      st.courtsByRound
+        .map((c, i) => `R${i + 1} ${c === null ? "bye" : courtName(c, courtNames)}`)
+        .join("  |  "),
       st.partners.join(", "),
       st.opponents.join(", "),
     ]);
