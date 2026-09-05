@@ -18,6 +18,14 @@ import {
   teamGap,
   teamLevel,
 } from "./scheduler";
+import {
+  GAMES_PER_MATCH,
+  leaderboards,
+  readScore,
+  tally,
+  type PlayerScore,
+  type Scores,
+} from "./scoring";
 
 const NAME_ALIASES = new Set(["name", "player", "player name", "full name"]);
 const FIRST_ALIASES = new Set(["first name", "first", "firstname"]);
@@ -212,14 +220,20 @@ function byesText(s: Schedule, byes: number[]): string {
 
 export async function buildScheduleWorkbook(
   s: Schedule,
-  courtNames: string[] = DEFAULT_COURT_NAMES
+  courtNames: string[] = DEFAULT_COURT_NAMES,
+  scores?: Scores
 ): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Tennis Doubles Mixer Scheduler";
   wb.created = new Date();
 
+  // Scores are optional: the workbook downloaded before play starts is the
+  // schedule alone, and the same builder produces the results afterwards.
+  const sc: Scores = scores ?? {};
+  const scored = Object.keys(sc).length > 0;
+
   // --- Schedule sheet ---
-  const ws = wb.addWorksheet("Schedule");
+  const ws = wb.addWorksheet(scored ? "Schedule & Scores" : "Schedule");
   // Same-gender play splits the courts into a men's and a women's draw, so the
   // sheet gains a column saying which draw each court belongs to.
   const showDraw = s.format === "same";
@@ -228,14 +242,20 @@ export async function buildScheduleWorkbook(
     ...(showDraw ? ["Draw"] : []),
     "Team A",
     "Level",
+    ...(scored ? ["Games"] : []),
     "vs",
     "Team B",
     "Level",
+    ...(scored ? ["Games"] : []),
     "Court Avg",
     "Level Spread",
     "Team Gap",
   ];
-  const teamCols = showDraw ? [3, 6] : [2, 5]; // columns holding player names
+  // Columns holding player names, which are the only left-aligned ones.
+  const teamCols = [
+    headers.indexOf("Team A") + 1,
+    headers.lastIndexOf("Team B") + 1,
+  ];
 
   const formatLabel =
     FORMATS.find((f) => f.value === s.format)?.label ?? s.format;
@@ -278,14 +298,18 @@ export async function buildScheduleWorkbook(
     for (const m of sorted) {
       const [a1, a2] = [s.players[m.teamA[0]].name, s.players[m.teamA[1]].name];
       const [b1, b2] = [s.players[m.teamB[0]].name, s.players[m.teamB[1]].name];
+      const ga = readScore(sc, rnd.number, m.court);
+      const gb = ga === null ? null : GAMES_PER_MATCH - ga;
       const row = ws.addRow([
         courtName(m.court, courtNames),
         ...(showDraw ? [drawLabel(m)] : []),
         `${a1} & ${a2}`,
         round2(teamLevel(s, m.teamA) / 2),
+        ...(scored ? [ga ?? ""] : []),
         "vs",
         `${b1} & ${b2}`,
         round2(teamLevel(s, m.teamB) / 2),
+        ...(scored ? [gb ?? ""] : []),
         round2(courtAvg(s, m)),
         round2(courtSpread(s, m)),
         round2(teamGap(s, m)),
@@ -297,6 +321,20 @@ export async function buildScheduleWorkbook(
           vertical: "middle",
         };
       });
+      // Embolden the winning side so a round reads at a glance.
+      if (ga !== null && gb !== null && ga !== gb) {
+        const winner = ga > gb ? teamCols[0] : teamCols[1];
+        row.getCell(winner).font = { bold: true };
+        row.getCell(winner + 2).font = { bold: true }; // its games column
+      }
+      if (scored && ga === null) {
+        // Not yet played, or nobody entered it. Say so rather than leave blanks.
+        row.getCell(headers.indexOf("vs") + 1).value = "not scored";
+        row.getCell(headers.indexOf("vs") + 1).font = {
+          italic: true,
+          color: { argb: "FF8A6D3B" },
+        };
+      }
     }
 
     if (rnd.byes.length) {
@@ -317,10 +355,12 @@ export async function buildScheduleWorkbook(
     "Gender",
     "Matches",
     "Byes",
+    ...(scored ? ["Games Won"] : []),
     "Where to be (by round)",
     "Partners",
     "Opponents",
   ];
+  const gamesByName = new Map(tally(s, sc).map((r) => [r.name, r.games]));
   const ph = ps.addRow(pHeaders);
   ph.eachCell((cell) => {
     cell.fill = HEADER_FILL;
@@ -338,6 +378,7 @@ export async function buildScheduleWorkbook(
       st.gender,
       st.matches,
       st.byes,
+      ...(scored ? [gamesByName.get(st.name) ?? 0] : []),
       st.courtsByRound
         .map((c, i) => `R${i + 1} ${c === null ? "bye" : courtName(c, courtNames)}`)
         .join("  |  "),
@@ -347,7 +388,7 @@ export async function buildScheduleWorkbook(
     row.eachCell((cell, col) => {
       cell.border = BORDER;
       cell.alignment = {
-        horizontal: col >= 2 && col <= 5 ? "center" : "left",
+        horizontal: col >= 2 && col <= (scored ? 6 : 5) ? "center" : "left",
         vertical: "middle",
       };
     });
@@ -355,5 +396,127 @@ export async function buildScheduleWorkbook(
   autosize(ps);
   ps.views = [{ state: "frozen", ySplit: 1 }];
 
+  if (scored) addLeaderboardSheet(wb, s, sc);
+
   return wb.xlsx.writeBuffer();
+}
+
+// ---- leaderboard -----------------------------------------------------------
+const MEDALS: Record<number, string> = {
+  1: "FFFFD966", // gold
+  2: "FFD9D9D9", // silver
+  3: "FFE8C39E", // bronze
+};
+
+const LEADER_HEADERS = [
+  "#",
+  "Player",
+  "Level",
+  "Games Won",
+  "Matches",
+  "Games / Match",
+  "Won",
+  "Lost",
+  "Tied",
+  "Byes",
+];
+
+/**
+ * One ranked table. Rank is on games won; matches played and games per match
+ * ride alongside so a player carrying a bye can be read in context rather than
+ * looking simply worse than they played.
+ */
+function addLeaderTable(
+  ws: ExcelJS.Worksheet,
+  title: string,
+  subtitle: string,
+  rows: PlayerScore[]
+): void {
+  const head = ws.addRow([title]);
+  ws.mergeCells(head.number, 1, head.number, LEADER_HEADERS.length);
+  const hc = head.getCell(1);
+  hc.fill = ROUND_FILL;
+  hc.font = { color: { argb: "FFFFFFFF" }, bold: true, size: 12 };
+
+  const sub = ws.addRow([subtitle]);
+  ws.mergeCells(sub.number, 1, sub.number, LEADER_HEADERS.length);
+  sub.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
+
+  const hr = ws.addRow(LEADER_HEADERS);
+  hr.eachCell((cell) => {
+    cell.fill = HEADER_FILL;
+    cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = BORDER;
+  });
+
+  if (!rows.length) {
+    const none = ws.addRow(["Nobody on the roster is marked for this table."]);
+    ws.mergeCells(none.number, 1, none.number, LEADER_HEADERS.length);
+    none.getCell(1).font = { italic: true, color: { argb: "FF8A6D3B" } };
+    ws.addRow([]);
+    ws.addRow([]);
+    return;
+  }
+
+  for (const r of rows) {
+    const row = ws.addRow([
+      r.rank,
+      r.name,
+      r.level,
+      r.games,
+      r.played,
+      r.played ? round2(r.avg) : "",
+      r.wins,
+      r.losses,
+      r.ties,
+      r.byes,
+    ]);
+    row.eachCell((cell, col) => {
+      cell.border = BORDER;
+      cell.alignment = {
+        horizontal: col === 2 ? "left" : "center",
+        vertical: "middle",
+      };
+    });
+    const medal = MEDALS[r.rank];
+    if (medal) {
+      row.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: medal } };
+      row.getCell(1).font = { bold: true };
+      row.getCell(2).font = { bold: true };
+      row.getCell(4).font = { bold: true };
+    }
+  }
+  ws.addRow([]);
+  ws.addRow([]);
+}
+
+function addLeaderboardSheet(wb: ExcelJS.Workbook, s: Schedule, sc: Scores): void {
+  const ws = wb.addWorksheet("Leaderboard");
+  const lb = leaderboards(s, sc);
+
+  const title = ws.addRow(["Leaderboard"]);
+  ws.mergeCells(title.number, 1, title.number, LEADER_HEADERS.length);
+  title.getCell(1).font = { bold: true, size: 14 };
+
+  const status = lb.complete
+    ? `All ${lb.total} matches scored.`
+    : `${lb.entered} of ${lb.total} matches scored - ${lb.total - lb.entered} still to come in.`;
+  const note = ws.addRow([
+    `Every match is ${GAMES_PER_MATCH} games; a player's score is the games their team won. ` +
+      `Ranking is on games won. ${status}`,
+  ]);
+  ws.mergeCells(note.number, 1, note.number, LEADER_HEADERS.length);
+  note.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
+  ws.addRow([]);
+
+  const byeNote = s.layout.byesPerRound
+    ? " Players with a bye have one fewer match to win games in; the Games / Match column shows the rate."
+    : "";
+  addLeaderTable(ws, "OPEN - all players", `Every player on the roster.${byeNote}`, lb.all);
+  addLeaderTable(ws, "MEN", "The same games, ranked among the men.", lb.men);
+  addLeaderTable(ws, "WOMEN", "The same games, ranked among the women.", lb.women);
+
+  autosize(ws);
+  ws.views = [{ state: "frozen", ySplit: 3 }];
 }

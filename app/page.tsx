@@ -29,6 +29,7 @@ import {
   venueOf,
 } from "@/lib/scheduler";
 import { parseBulkRoster, type Row } from "@/lib/roster";
+import { GAMES_PER_MATCH } from "@/lib/scoring";
 
 function toRows(roster: RosterRow[]): Row[] {
   return roster.map((r) => ({
@@ -86,6 +87,13 @@ export default function Home() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   // Roster entry: upload a spreadsheet, or type the registrants in directly.
+  // Publishing for score entry. Local until the organiser asks for it: the
+  // schedule only leaves the browser when they press the button.
+  const [eventId, setEventId] = useState<string>("");
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+  const [copied, setCopied] = useState(false);
+
   const [source, setSource] = useState<"upload" | "manual" | null>(null);
   const [entry, setEntry] = useState<Row>({ name: "", level: "", gender: "" });
   const [entryMsg, setEntryMsg] = useState<{ kind: "error" | "info"; text: string } | null>(null);
@@ -246,6 +254,9 @@ export default function Home() {
   async function generate() {
     setError("");
     setSchedule(null);
+    // A new schedule is a different event; the old code no longer describes it.
+    setEventId("");
+    setPublishError("");
     const { players, error: verr } = rowsToPlayers(rows, format);
     if (verr || !players) {
       setError(verr ?? "Invalid roster.");
@@ -271,6 +282,50 @@ export default function Home() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Send the schedule to the server so phones can score it. This is the only
+   * point at which anything leaves the browser, and it is always a deliberate
+   * press: generating and downloading a schedule stays entirely local.
+   */
+  async function publish() {
+    if (!schedule || publishing) return;
+    setPublishing(true);
+    setPublishError("");
+    try {
+      const res = await fetch("/api/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schedule,
+          courtNames: usedCourtNames,
+          title: fileName ? fileName.replace(/\.xlsx?$/i, "") : "Tennis mixer",
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not publish the event.");
+      setEventId(body.id);
+    } catch (e) {
+      setPublishError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  const eventUrl = eventId
+    ? `${typeof window === "undefined" ? "" : window.location.origin}/e/${eventId}`
+    : "";
+
+  async function copyLink() {
+    if (!eventUrl) return;
+    try {
+      await navigator.clipboard.writeText(eventUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard blocked; the link is on screen to copy by hand.
     }
   }
 
@@ -738,6 +793,67 @@ export default function Home() {
             >
               ⬇ Download Excel (.xlsx)
             </button>
+          </div>
+
+          {/* Score entry. Publishing is opt-in, and the only thing that ever
+              sends the schedule off this device. */}
+          <div className="mb-6 rounded-xl border border-emerald-700/30 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
+            {!eventId ? (
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Score it on the day</h3>
+                  <p className="mt-1 text-xs opacity-70">
+                    Publish this schedule to get a link. Anyone you share it with can enter
+                    their court&apos;s score from their phone, and the leaderboard updates
+                    for everyone. Each match is {GAMES_PER_MATCH} games.
+                  </p>
+                </div>
+                <button
+                  onClick={publish}
+                  disabled={publishing}
+                  className="shrink-0 rounded-lg border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-700 hover:text-white disabled:opacity-50 dark:text-emerald-300"
+                >
+                  {publishing ? "Publishing…" : "Publish for scoring"}
+                </button>
+              </div>
+            ) : (
+              <div>
+                <h3 className="text-sm font-semibold">Ready for scores</h3>
+                <p className="mt-1 text-xs opacity-70">
+                  Share this link with the courts. Anyone who opens it can enter a score and
+                  see the leaderboard.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <code className="rounded bg-black/5 px-2 py-1 font-mono text-lg font-semibold tracking-[0.3em] dark:bg-white/10">
+                    {eventId}
+                  </code>
+                  <a
+                    href={`/e/${eventId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-800"
+                  >
+                    Open the scoreboard ↗
+                  </a>
+                  <button
+                    onClick={copyLink}
+                    className="rounded-lg border border-black/15 px-3 py-1.5 text-sm hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
+                  >
+                    {copied ? "Copied ✓" : "Copy link"}
+                  </button>
+                </div>
+                <p className="mt-2 break-all text-xs opacity-50">{eventUrl}</p>
+                <p className="mt-2 text-xs opacity-60">
+                  Download the Excel from the scoreboard once scores are in, and it will
+                  carry the results and the leaderboard alongside the schedule.
+                </p>
+              </div>
+            )}
+            {publishError && (
+              <p className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-800 dark:bg-red-950/40 dark:text-red-200">
+                {publishError}
+              </p>
+            )}
           </div>
 
           <div className="mb-3 grid grid-cols-3 gap-3">

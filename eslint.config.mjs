@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Build output from `vercel build`: thousands of warnings about bundled
+    // code we did not write, which drowns out anything real.
+    ".vercel/**",
   ]),
 ]);
 
