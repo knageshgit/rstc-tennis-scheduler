@@ -4,12 +4,18 @@
  * The body carries the whole schedule. Nothing about it is recomputed here:
  * the browser has already run the engine, and re-running it on the server could
  * produce a different schedule from the one the organiser is looking at.
+ *
+ * Organisers only, since publishing also moves the club link: without the gate
+ * anyone who found the site could point the root page at a schedule of their
+ * own. Reading an event and entering a score stay open to everybody.
  */
+import { isAdminRequest } from "@/lib/admin";
 import { MAX_COURTS } from "@/lib/scheduler";
 import {
   createEvent,
   isStoreConfigured,
   isValidScheduleShape,
+  setCurrentEvent,
   StoreUnavailableError,
 } from "@/lib/store";
 
@@ -17,6 +23,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  if (!isAdminRequest(request)) {
+    return Response.json({ error: "Organisers only." }, { status: 401 });
+  }
   if (!isStoreConfigured()) {
     return Response.json(
       { error: "Score sharing is not configured on this deployment." },
@@ -51,7 +60,17 @@ export async function POST(request: Request) {
       names,
       schedule
     );
-    return Response.json({ id: ev.id, createdAt: ev.createdAt }, { status: 201 });
+    // Publishing is also the moment the club link starts pointing here, so the
+    // organiser never has to hand out a new URL. If this write fails the event
+    // itself is still fine and reachable by its own code, so it is not fatal.
+    let current = true;
+    try {
+      await setCurrentEvent(ev.id);
+    } catch (err) {
+      console.error("setCurrentEvent failed", err);
+      current = false;
+    }
+    return Response.json({ id: ev.id, createdAt: ev.createdAt, current }, { status: 201 });
   } catch (err) {
     if (err instanceof StoreUnavailableError) {
       return Response.json({ error: err.message }, { status: 503 });

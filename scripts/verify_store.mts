@@ -6,11 +6,14 @@
 import { generateSchedule, type Player, type Schedule } from "../lib/scheduler";
 import { matchKey, type Scores } from "../lib/scoring";
 import {
+  currentPath,
+  foldCurrent,
   foldEntries,
   isValidEventId,
   isValidScheduleShape,
   newEventId,
   normalizeEventId,
+  parseCurrent,
   parseEntry,
   scorePath,
   scorePrefix,
@@ -235,6 +238,49 @@ eq(
     Object.fromEntries(burst.map((e) => [e.key, e.games])) as Scores
   );
   check("every court in the burst is present", Object.keys(foldEntries(shuffled)).length === 6);
+}
+
+// ---- the club link ---------------------------------------------------------
+// The root URL follows a pointer that is written the same append-only way as
+// the scores, so the checks are the same shape: newest wins, junk is ignored.
+{
+  const round = (id: string | null, at: number) => parseCurrent(currentPath(id, at));
+  eq("a pointer survives a round trip", round("K7M2QP", 1700), {
+    id: "K7M2QP",
+    at: 1700,
+  });
+  eq("taking the link down survives a round trip", round(null, 1800), {
+    id: null,
+    at: 1800,
+  });
+  check("a score path is not read as a pointer", parseCurrent("ev/K7M2QP/s/r1c1__5__9") === null);
+  check("a pointer with no timestamp is ignored", parseCurrent("cur/K7M2QP") === null);
+  check("a pointer to a bogus code is ignored", parseCurrent("cur/1700__nope") === null);
+
+  check("nothing published means nothing shown", foldCurrent([]) === null);
+  check(
+    "the newest pointer wins whatever order they arrive in",
+    foldCurrent([
+      { id: "AAA222", at: 10 },
+      { id: "CCC444", at: 30 },
+      { id: "BBB333", at: 20 },
+    ]) === "CCC444"
+  );
+  check(
+    "a take-down after a publish leaves the link empty",
+    foldCurrent([
+      { id: "AAA222", at: 10 },
+      { id: null, at: 20 },
+    ]) === null
+  );
+  check(
+    "re-publishing after a take-down puts the link back",
+    foldCurrent([
+      { id: "AAA222", at: 10 },
+      { id: null, at: 20 },
+      { id: "BBB333", at: 30 },
+    ]) === "BBB333"
+  );
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll store checks passed.");

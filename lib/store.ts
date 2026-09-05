@@ -272,3 +272,83 @@ export async function setScore(
   const key = matchKey(round, court);
   await put(scorePath(id, key, games, Date.now()), "{}", PUT_OPTS);
 }
+
+// ---- the club link ---------------------------------------------------------
+/**
+ * Which event the root URL shows.
+ *
+ * The club wanted one link they could put in the group chat once and reuse
+ * every week, so the root page does not ask for a code: it follows a pointer
+ * that the organiser moves when they publish. Old per-event links keep working
+ * and keep showing their own day.
+ *
+ * The pointer uses the same append-only trick as the scores above, for the
+ * same reason and one more: a blob `put` refuses to overwrite by default, and
+ * a cached read of a mutable blob could hand a member last week's mixer. So
+ * nothing is mutated. Each change writes a new blob whose pathname carries the
+ * event code and the time, and the newest one wins:
+ *
+ *     cur/1764950400000__K7M2QP     the club link points here
+ *     cur/1765555200000__-          taken down; the root shows nothing
+ *
+ * One blob per publish is a handful per season, which is not worth tidying.
+ */
+const CURRENT_PREFIX = "cur/";
+
+/** Marks the club link as pointing at nothing. Not a legal event code. */
+const NO_EVENT = "-";
+
+/** Build the pathname that records where the club link points. For tests. */
+export function currentPath(id: string | null, at: number): string {
+  return `${CURRENT_PREFIX}${at}__${id ?? NO_EVENT}`;
+}
+
+/** Recover a pointer from its pathname, or null if it is not one. */
+export function parseCurrent(pathname: string): { id: string | null; at: number } | null {
+  if (!pathname.startsWith(CURRENT_PREFIX)) return null;
+  const parts = pathname.slice(CURRENT_PREFIX.length).split("__");
+  if (parts.length !== 2) return null;
+  const at = Number(parts[0]);
+  if (!Number.isFinite(at)) return null;
+  if (parts[1] === NO_EVENT) return { id: null, at };
+  if (!isValidEventId(parts[1])) return null;
+  return { id: parts[1], at };
+}
+
+/**
+ * Where the club link points now: the newest pointer written. Pure, so the
+ * tie-breaking is testable without touching the network.
+ */
+export function foldCurrent(entries: { id: string | null; at: number }[]): string | null {
+  let best: { id: string | null; at: number } | null = null;
+  for (const e of entries) {
+    if (!best || e.at >= best.at) best = e;
+  }
+  return best?.id ?? null;
+}
+
+/** Point the club link at an event, or at nothing when `id` is null. */
+export async function setCurrentEvent(id: string | null): Promise<void> {
+  assertConfigured();
+  await put(currentPath(id, Date.now()), "{}", PUT_OPTS);
+}
+
+/** The event the root URL should show, or null if nothing is published. */
+export async function getCurrentEventId(): Promise<string | null> {
+  if (!isStoreConfigured()) return null;
+  const entries: { id: string | null; at: number }[] = [];
+  let cursor: string | undefined;
+  try {
+    do {
+      const page = await list({ prefix: CURRENT_PREFIX, limit: 1000, cursor });
+      for (const blob of page.blobs) {
+        const entry = parseCurrent(blob.pathname);
+        if (entry) entries.push(entry);
+      }
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+  } catch {
+    return null; // Storage is unreachable; the root page says so politely.
+  }
+  return foldCurrent(entries);
+}

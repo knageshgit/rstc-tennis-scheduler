@@ -38,11 +38,23 @@ to the format, not a scheduling failure.
 
 **Live app:** https://rstc-tennis-sch.vercel.app
 
+## Two pages, two audiences
+
+| Who | URL | What they can do |
+|-----|-----|------------------|
+| **Club members** | `/` (the live app link above) | See the **Schedule**, enter and read **Results**, watch the **Leaderboard**, download the Excel. Share this link freely; it is the same every week. |
+| **Organisers** | `/admin/<secret>` | Everything above, plus building a schedule and publishing it. Keep this link to yourself. |
+
+The club link never changes. Publishing a schedule points it at that mixer, so the
+one URL in the group chat always opens whatever is on today. Each mixer also keeps a
+permanent address of its own at `/e/<CODE>` for looking one up after the next has
+replaced it.
+
 ## Web app (Next.js): this is what deploys
 
 Building a schedule runs entirely client-side: upload, edit, generate and download
 all happen in the browser and nothing is sent anywhere. The one exception is
-**Publish for scoring** (below), which is an explicit button press and the only
+**Publish to the club link** (below), which is an explicit button press and the only
 thing that ever puts a schedule on a server.
 
 ```bash
@@ -51,7 +63,7 @@ npm run dev      # http://localhost:3000
 npm run build    # production build
 ```
 
-### How to use
+### How to use (organisers, at `/admin/<secret>`)
 1. Prepare an `.xlsx` roster with a **name** column (or **First name** + **Last name**)
    and a level column (**Level**, **NTRP**, **USDA**, or **Tournament Rating**).
 2. Upload it, fill in any blank ratings in the editable grid.
@@ -78,14 +90,21 @@ rank follows the total, and the average is there to show when a bye is the reaso
 someone sits lower than their play deserved.
 
 ### Running it on the day
-1. Generate the schedule, then press **Publish for scoring**. You get a six-character
-   code and a link, e.g. `/e/K7M2QP`.
-2. Share the link with the courts. Anyone who opens it can enter a result and see the
-   leaderboard; there are no logins. Each phone can filter to a single court, and that
-   choice is remembered on that device.
-3. Enter the games for either team from a 0-8 picker; the other side fills in
-   automatically. Entries save immediately and every phone refreshes every 10 seconds.
-4. **Download results as Excel** from the scoreboard at any point.
+1. Generate the schedule, then press **Publish to the club link**. The root URL now
+   shows this mixer, and it also gets a permanent address of its own, `/e/K7M2QP`.
+2. Members open the club link. No code, no login: the same URL works every week.
+   Three tabs:
+   - **Schedule** - every round and court. **Find me** picks a name and pulls that
+     player's whole day into one strip, marking their match in each round. Remembered
+     on that phone.
+   - **Results** - the 0-8 picker for each match; enter the games for either team and
+     the other side fills in automatically. Anyone may enter any court, deliberately.
+     Entries save immediately and every phone refreshes every 10 seconds. Each phone
+     can filter to a single court, and that choice is remembered too.
+   - **Leaderboard** - Open, Men and Women, live as scores come in.
+3. **Download results as Excel** from the Leaderboard tab at any point.
+4. When the day is over, **take it down** from the organiser page if you would rather
+   the root page sat empty until next week.
 
 The scored workbook is the same file, not a second one: the schedule sheet gains
 **Games** columns with the winning side in bold and unscored matches called out, the
@@ -117,15 +136,62 @@ the reader keeps the latest per match, which also means a correction beats a sta
 value arriving late from another phone. `scripts/verify_store.mts` covers that round
 trip and the last-write-wins rule.
 
+The club link is stored the same append-only way, for the same reason and one more:
+a `put` refuses to overwrite by default, and a cached read of a mutable blob could
+serve a member last week's mixer. So each change writes a new pointer and the newest
+wins.
+
+```
+cur/1764950400000__K7M2QP     the club link points here
+cur/1765555200000__-          taken down; the root page shows nothing
+```
+
 Without `BLOB_READ_WRITE_TOKEN` everything else still works and publishing returns a
 plain "not configured" message rather than failing.
+
+### The organiser gate
+
+Two locks, both environment variables, because a club wanted a link to keep rather
+than an account system:
+
+| Variable | What it does |
+|----------|--------------|
+| `ADMIN_PATH` | The unguessable path segment. The page lives at `/admin/$ADMIN_PATH`; every other segment, and a bare `/admin`, 404s like any unused URL. |
+| `ADMIN_PIN` | Typed once per device. The PIN is checked on the server, which answers with an httpOnly cookie holding a hash of both secrets, good for a month. |
+
+The path hides the page from anyone sweeping the site; the PIN is what still protects
+it when the link is forwarded to the wrong group chat. Because the unlock endpoint
+wants the path as well as the PIN, guessing the PIN means already having the link,
+which is what makes a short PIN defensible here.
+
+Both are checked in constant time, and the cookie stops working the moment either
+secret changes: **rotating a leaked link is one `vercel env` edit and a redeploy**.
+`POST /api/events` (publish) and `POST /api/admin/current` (move or take down the
+club link) require the cookie. Reading an event and entering a score never do.
+
+> **Leaving them unset leaves the admin area open**, which is deliberate so that
+> `npm run dev` works on a laptop with no setup: any segment reaches `/admin/<x>` and
+> no PIN is asked for. The page says so in a banner. Set both in production.
+
+```bash
+vercel env add ADMIN_PATH production   # e.g. 16 hex characters
+vercel env add ADMIN_PIN production
+```
+
+`scripts/verify_admin.mts` covers the wrong answers as well as the right ones: wrong
+path, wrong PIN, forged and absent cookies, cookies issued before a rotation, and
+each half-configured combination.
 
 ### Project layout
 | Path | Purpose |
 |------|---------|
-| `app/page.tsx` | The organiser UI: roster → generate → download → publish. |
-| `app/e/[id]/` | The scoreboard phones open: score entry and the leaderboard. |
+| `app/page.tsx` | The club link: resolves the current event and hands it to the member view. |
+| `app/EventView.tsx` | What members see: the Schedule / Results / Leaderboard tabs. |
+| `app/e/[id]/` | One mixer by its permanent code, rendering the same three tabs. |
+| `app/admin/[token]/` | The organiser page: the gate, the PIN form, and the generator. |
 | `app/api/events/` | Publish an event, read it, and record one match's score. |
+| `app/api/admin/` | Unlock and lock a device; move or take down the club link. |
+| `lib/admin.ts` | The organiser gate: secret path, PIN, and the unlock cookie (pure). |
 | `lib/scheduler.ts` | Scheduling/optimization engine (randomized restarts). |
 | `lib/scoring.ts` | Games tally and the Open/Men/Women rankings (pure, no I/O). |
 | `lib/store.ts` | Event storage on Vercel Blob, and the guard on what may be stored. |
@@ -134,7 +200,8 @@ plain "not configured" message rather than failing.
 | `scripts/verify.mts` | Engine checks across all three formats and a dozen roster shapes, plus expected-failure cases. |
 | `scripts/verify_excel.mts` | Round-trips the exported workbook for each format, scored and unscored. |
 | `scripts/verify_scoring.mts` | Tally and ranking checks, including byes, ties and half-scored events. |
-| `scripts/verify_store.mts` | Event codes and the schedule shape guard. |
+| `scripts/verify_store.mts` | Event codes, the schedule shape guard, and the club-link pointer. |
+| `scripts/verify_admin.mts` | The organiser gate, right answers and wrong ones. |
 | `scripts/verify_travel.mts` | Asserts travel polish never costs schedule quality. |
 | `scripts/verify_roster.mts` | The pasted-list parser. |
 | `python/` | The original Python/Streamlit version (see below). Excluded from the Vercel build. |
