@@ -4,6 +4,12 @@
 import ExcelJS from "exceljs";
 import { buildScheduleWorkbook } from "../lib/excel.ts";
 import { generateSchedule, type Format, type Player } from "../lib/scheduler.ts";
+import {
+  GAMES_PER_MATCH,
+  leaderboards,
+  matchKey,
+  type Scores,
+} from "../lib/scoring.ts";
 
 const LEVELS = [2.5, 3.0, 3.5, 4.0, 4.5];
 function makeRoster(men: number, women: number, seed = 3): Player[] {
@@ -78,8 +84,108 @@ for (const format of ["open", "mixed", "same"] as Format[]) {
   );
 }
 
+// ---- the scored workbook ---------------------------------------------------
+// The same builder produces the results file once scores are in: the schedule
+// sheet gains games columns and a Leaderboard sheet appears.
+for (const [format, fill] of [
+  ["open", "all"],
+  ["mixed", "partial"],
+  ["same", "all"],
+] as [Format, "all" | "partial"][]) {
+  const players = makeRoster(13, 12);
+  const s = generateSchedule(players, { numRounds: 5, seed: 99, numCourts: 6, format });
+
+  const scores: Scores = {};
+  let i = 0;
+  for (const rnd of s.rounds) {
+    for (const m of rnd.matches) {
+      if (fill === "partial" && i % 3 === 0) { i++; continue; } // leave gaps
+      scores[matchKey(rnd.number, m.court)] = i++ % (GAMES_PER_MATCH + 1);
+    }
+  }
+  const lb = leaderboards(s, scores);
+  const buf = await buildScheduleWorkbook(s, COURT_NAMES, scores);
+
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.getWorksheet("Schedule & Scores");
+  const lw = wb.getWorksheet("Leaderboard");
+  check(!!ws, `${format} scored: schedule sheet not renamed`);
+  check(!!lw, `${format} scored: no Leaderboard sheet`);
+  check(!wb.getWorksheet("Schedule"), `${format} scored: unscored sheet name left behind`);
+  if (!ws || !lw) continue;
+
+  const wsText: string[] = [];
+  ws.eachRow((row) => row.eachCell((cell) => wsText.push(String(cell.value ?? ""))));
+  check(wsText.includes("Games"), `${format} scored: no Games column on the schedule`);
+  check(
+    (fill === "partial") === wsText.includes("not scored"),
+    `${format} scored: unscored matches not called out correctly`
+  );
+
+  // The three tables are present and each holds one row per eligible player.
+  const lbText: string[] = [];
+  lw.eachRow((row) => row.eachCell((cell) => lbText.push(String(cell.value ?? ""))));
+  for (const t of ["OPEN - all players", "MEN", "WOMEN"]) {
+    check(lbText.includes(t), `${format} scored: "${t}" table missing`);
+  }
+  check(
+    lbText.some((t) => t.includes(`${lb.entered} of ${lb.total} matches scored`)) ||
+      (lb.complete && lbText.some((t) => t.includes(`All ${lb.total} matches scored`))),
+    `${format} scored: progress line wrong`
+  );
+
+  // Every name appears three times when the roster is fully gendered: once in
+  // the Open table and once in its own gender table... plus the By Player sheet
+  // is a different worksheet, so within the leaderboard it is exactly twice.
+  for (const p of [players[0], players[players.length - 1]]) {
+    const seen = lbText.filter((t) => t === p.name).length;
+    check(seen === 2, `${format} scored: ${p.name} appears ${seen} times, expected 2`);
+  }
+
+  // The games totals in the sheet must match the tally exactly.
+  const totalInSheet = lb.all.reduce((n, r) => n + r.games, 0);
+  check(
+    totalInSheet === lb.entered * 2 * GAMES_PER_MATCH,
+    `${format} scored: games total ${totalInSheet}, expected ${lb.entered * 2 * GAMES_PER_MATCH}`
+  );
+
+  // Ranks in the sheet must be non-decreasing down the Open table.
+  const rankCol: number[] = [];
+  let inOpen = false;
+  lw.eachRow((row) => {
+    const first = String(row.getCell(1).value ?? "");
+    if (first.startsWith("OPEN")) inOpen = true;
+    else if (first === "MEN") inOpen = false;
+    else if (inOpen && typeof row.getCell(1).value === "number") {
+      rankCol.push(row.getCell(1).value as number);
+    }
+  });
+  check(rankCol.length === players.length, `${format} scored: Open table has ${rankCol.length} rows`);
+  check(
+    rankCol.every((r, j) => j === 0 || rankCol[j - 1] <= r),
+    `${format} scored: ranks are out of order`
+  );
+
+  console.log(
+    `ok  ${format.padEnd(5)} scored (${fill.padEnd(7)}) -> ` +
+      `${((buf as ArrayBuffer).byteLength / 1024).toFixed(1)} KB, ` +
+      `${lb.entered}/${lb.total} matches, leader ${lb.all[0].name} on ${lb.all[0].games} games`
+  );
+}
+
+// An empty score set must still produce the plain schedule workbook.
+{
+  const s = generateSchedule(makeRoster(12, 12), { numRounds: 4, seed: 5, format: "open" });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(await buildScheduleWorkbook(s, COURT_NAMES, {}));
+  check(!!wb.getWorksheet("Schedule"), "empty scores: Schedule sheet missing");
+  check(!wb.getWorksheet("Leaderboard"), "empty scores: Leaderboard should not appear");
+  console.log("ok  empty score set falls back to the plain schedule workbook");
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) FAILED`);
   process.exit(1);
 }
-console.log("\nExcel export verified for all formats.");
+console.log("\nExcel export verified for all formats, scored and unscored.");
