@@ -5,22 +5,30 @@ import { useMemo, useRef, useState } from "react";
 import type { RosterRow } from "@/lib/excel";
 import {
   DEFAULT_COURT_NAMES,
+  FORMATS,
+  Format,
   Gender,
+  Layout,
   MAX_COURTS,
   MAX_PLAYERS,
   PLAYERS_PER_COURT,
   Player,
   Schedule,
   ScheduleError,
+  computeLayout,
   courtName,
   courtSpread,
+  drawLabel,
+  formatNeedsGender,
   generateSchedule,
+  playerStats,
   round2,
   teamGap,
   teamLevel,
+  travelSummary,
+  venueOf,
 } from "@/lib/scheduler";
-
-type Row = { name: string; level: string; gender: Gender }; // level as string for editing
+import { parseBulkRoster, type Row } from "@/lib/roster";
 
 function toRows(roster: RosterRow[]): Row[] {
   return roster.map((r) => ({
@@ -30,9 +38,13 @@ function toRows(roster: RosterRow[]): Row[] {
   }));
 }
 
-function rowsToPlayers(rows: Row[]): { players?: Player[]; error?: string } {
+function rowsToPlayers(
+  rows: Row[],
+  format: Format
+): { players?: Player[]; error?: string } {
   const players: Player[] = [];
   const names = new Set<string>();
+  const noGender: string[] = [];
   for (const [i, r] of rows.entries()) {
     const name = r.name.trim();
     if (!name) continue; // ignore blank rows
@@ -42,10 +54,20 @@ function rowsToPlayers(rows: Row[]): { players?: Player[]; error?: string } {
     const lvl = Number(r.level);
     if (r.level.trim() === "" || !Number.isFinite(lvl))
       return { error: `Row ${i + 1} (${name}) needs a numeric rating.` };
+    if (!r.gender) noGender.push(name);
     players.push({ name, level: lvl, gender: r.gender });
   }
   if (players.length < PLAYERS_PER_COURT)
     return { error: `Need at least ${PLAYERS_PER_COURT} rated players.` };
+  if (formatNeedsGender(format) && noGender.length) {
+    const shown = noGender.slice(0, 6).join(", ");
+    const more = noGender.length > 6 ? ` and ${noGender.length - 6} more` : "";
+    return {
+      error:
+        `This format needs every player marked M or F. ` +
+        `Missing gender for: ${shown}${more}.`,
+    };
+  }
   return { players };
 }
 
@@ -54,6 +76,7 @@ export default function Home() {
   const [fileName, setFileName] = useState<string>("");
   const [numRounds, setNumRounds] = useState(5);
   const [numCourts, setNumCourts] = useState(MAX_COURTS);
+  const [format, setFormat] = useState<Format>("open");
   const [courtNames, setCourtNames] = useState<string[]>([...DEFAULT_COURT_NAMES]);
   const [seed, setSeed] = useState("");
   const [schedule, setSchedule] = useState<Schedule | null>(null);
@@ -61,6 +84,14 @@ export default function Home() {
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // Roster entry: upload a spreadsheet, or type the registrants in directly.
+  const [source, setSource] = useState<"upload" | "manual" | null>(null);
+  const [entry, setEntry] = useState<Row>({ name: "", level: "", gender: "" });
+  const [entryMsg, setEntryMsg] = useState<{ kind: "error" | "info"; text: string } | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const nameInput = useRef<HTMLInputElement>(null);
 
   // ---- derived variables ----
   const named = rows.filter((r) => r.name.trim());
@@ -71,12 +102,49 @@ export default function Home() {
   const missingCount = named.filter(
     (r) => r.level.trim() === "" || !Number.isFinite(Number(r.level))
   ).length;
-  const playing = Math.min(
-    PLAYERS_PER_COURT * Math.floor(Math.min(validCount, MAX_PLAYERS) / PLAYERS_PER_COURT),
-    numCourts * PLAYERS_PER_COURT
+  const needsGender = formatNeedsGender(format);
+
+  // Preview how the roster maps onto courts under the selected format. This is
+  // the same calculation the engine uses, so what's shown here is what you get.
+  const preview = useMemo<{ layout?: Layout; problem?: string }>(() => {
+    const roster: Player[] = named.map((r) => ({
+      name: r.name.trim(),
+      level: Number(r.level) || 0,
+      gender: r.gender,
+    }));
+    if (roster.length < PLAYERS_PER_COURT) return {};
+    try {
+      return { layout: computeLayout(roster, numCourts, format) };
+    } catch (e) {
+      return { problem: e instanceof Error ? e.message : String(e) };
+    }
+    // `named` is rebuilt each render; key off the underlying rows instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, numCourts, format]);
+
+  const bulkCount = useMemo(() => parseBulkRoster(bulkText).length, [bulkText]);
+
+  // Courts sharing a name stem are treated as one venue, so players can be kept
+  // there. "Shorebird 1" and "Shorebird 2" are one venue; "Dolphin 1" is not.
+  const venueGroups = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (let i = 0; i < numCourts; i++) {
+      const name = courtName(i + 1, courtNames);
+      const key = venueOf(name);
+      groups.set(key, [...(groups.get(key) ?? []), name]);
+    }
+    return [...groups.values()];
+  }, [courtNames, numCourts]);
+
+  const travel = useMemo(
+    () => (schedule ? travelSummary(schedule) : null),
+    [schedule]
   );
-  const courtsInPlay = playing / PLAYERS_PER_COURT;
-  const byesEach = Math.max(0, Math.min(validCount, MAX_PLAYERS) - playing);
+
+  const overCap = validCount > MAX_PLAYERS;
+  const layout = preview.layout;
+  const courtsInPlay = layout?.courtsUsed ?? 0;
+  const byesEach = layout?.byesPerRound ?? 0;
 
   async function onFile(file: File) {
     setError("");
@@ -106,10 +174,79 @@ export default function Home() {
     setCourtNames((prev) => prev.map((n, j) => (j === i ? value : n)));
   }
 
+  /** Add the one player currently typed into the quick-add form. */
+  function addEntry() {
+    const name = entry.name.trim();
+    if (!name) {
+      setEntryMsg({ kind: "error", text: "Enter a name first." });
+      nameInput.current?.focus();
+      return;
+    }
+    if (rows.some((r) => r.name.trim().toLowerCase() === name.toLowerCase())) {
+      setEntryMsg({ kind: "error", text: `"${name}" is already on the roster.` });
+      return;
+    }
+    if (entry.level.trim() !== "" && !Number.isFinite(Number(entry.level))) {
+      setEntryMsg({ kind: "error", text: "Rating must be a number, e.g. 3.5." });
+      return;
+    }
+    setError("");
+    setSchedule(null);
+    setRows((prev) => [...prev, { name, level: entry.level.trim(), gender: entry.gender }]);
+    setEntry({ name: "", level: "", gender: "" });
+    setEntryMsg({ kind: "info", text: `Added ${name}.` });
+    nameInput.current?.focus();
+  }
+
+  /** Add everyone in the paste box, skipping names already on the roster. */
+  function applyBulk() {
+    const parsed = parseBulkRoster(bulkText);
+    if (!parsed.length) {
+      setEntryMsg({ kind: "error", text: "Nothing to add - put one player per line." });
+      return;
+    }
+    const seen = new Set(rows.map((r) => r.name.trim().toLowerCase()));
+    const fresh: Row[] = [];
+    let skipped = 0;
+    for (const p of parsed) {
+      const key = p.name.toLowerCase();
+      if (seen.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(key);
+      fresh.push(p);
+    }
+    setError("");
+    setSchedule(null);
+    setRows((prev) => [...prev, ...fresh]);
+    setBulkText("");
+    setEntryMsg({
+      kind: skipped ? "error" : "info",
+      text:
+        `Added ${fresh.length} player(s)` +
+        (skipped ? `; skipped ${skipped} already on the roster.` : "."),
+    });
+  }
+
+  function clearRoster() {
+    setRows([]);
+    setSchedule(null);
+    setError("");
+    setEntryMsg(null);
+    setFileName("");
+  }
+
+  function chooseSource(next: "upload" | "manual") {
+    setSource(next);
+    setError("");
+    setEntryMsg(null);
+  }
+
   async function generate() {
     setError("");
     setSchedule(null);
-    const { players, error: verr } = rowsToPlayers(rows);
+    const { players, error: verr } = rowsToPlayers(rows, format);
     if (verr || !players) {
       setError(verr ?? "Invalid roster.");
       return;
@@ -121,7 +258,13 @@ export default function Home() {
       if (seed.trim() !== "" && !Number.isInteger(seedNum)) {
         throw new ScheduleError("Seed must be a whole number.");
       }
-      const s = generateSchedule(players, numRounds, seedNum, numCourts);
+      const s = generateSchedule(players, {
+        numRounds,
+        seed: seedNum,
+        numCourts,
+        format,
+        courtNames, // decides which courts share a venue
+      });
       setSchedule(s);
       setUsedCourtNames([...courtNames]); // freeze names used for this result
     } catch (e) {
@@ -168,39 +311,64 @@ export default function Home() {
       <header className="mb-8">
         <h1 className="text-2xl font-bold sm:text-3xl">🎾 Tennis Doubles Mixer Scheduler</h1>
         <p className="mt-2 text-sm opacity-70">
-          Upload a roster, set your variables, and generate a balanced doubles schedule:
+          Enter your registrants (or upload a roster), set your variables, and generate a
+          balanced doubles schedule:
           similar-level players face off each round, and no two people are ever teammates
           twice. Download the result as Excel.
         </p>
       </header>
 
-      {/* Upload */}
+      {/* Roster source: upload a file, or type players in */}
       <section className="mb-6 rounded-xl border border-black/10 p-5 dark:border-white/15">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="font-semibold">1. Upload roster (.xlsx)</h2>
+            <h2 className="font-semibold">1. Build your roster</h2>
             <p className="mt-1 text-xs opacity-60">
+              Upload a spreadsheet, or type the registrants straight into the browser.
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <ModeButton active={source === "upload"} onClick={() => chooseSource("upload")}>
+              Upload Excel
+            </ModeButton>
+            <ModeButton active={source === "manual"} onClick={() => chooseSource("manual")}>
+              Enter manually
+            </ModeButton>
+          </div>
+        </div>
+
+        {source === null && (
+          <p className="text-sm opacity-60">
+            Pick one to get started. You can mix the two: upload a file and still add
+            walk-ups by hand, or the other way round.
+          </p>
+        )}
+
+        {source === "upload" && (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs opacity-60">
               Needs a name column (or First/Last name) and a level column (Level, NTRP,
               USDA, or Tournament Rating). A Gender column is used if present.
             </p>
+            <div className="flex shrink-0 items-center gap-3">
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+              />
+              <button
+                onClick={() => fileInput.current?.click()}
+                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+              >
+                Choose file
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".xlsx"
-              className="hidden"
-              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
-            />
-            <button
-              onClick={() => fileInput.current?.click()}
-              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
-            >
-              Choose file
-            </button>
-          </div>
-        </div>
-        {fileName && (
+        )}
+
+        {source === "upload" && fileName && (
           <p className="mt-3 text-xs opacity-70">
             Loaded <span className="font-medium">{fileName}</span> - {validCount} players
             {missingCount > 0 && (
@@ -209,6 +377,105 @@ export default function Home() {
                 ({missingCount} missing a rating - fill them below)
               </span>
             )}
+          </p>
+        )}
+
+        {source === "manual" && (
+          <div>
+            <div className="grid gap-3 sm:grid-cols-[1fr_7rem_6rem_auto]">
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="opacity-70">Name</span>
+                <input
+                  ref={nameInput}
+                  value={entry.name}
+                  onChange={(e) => setEntry({ ...entry, name: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && addEntry()}
+                  placeholder="Jane Doe"
+                  className="rounded-lg border border-black/15 bg-transparent px-3 py-2 outline-none focus:border-emerald-500 dark:border-white/20"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="opacity-70">Rating</span>
+                <input
+                  value={entry.level}
+                  inputMode="decimal"
+                  onChange={(e) => setEntry({ ...entry, level: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && addEntry()}
+                  placeholder="3.5"
+                  className="rounded-lg border border-black/15 bg-transparent px-3 py-2 outline-none focus:border-emerald-500 dark:border-white/20"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="opacity-70">Gender</span>
+                <select
+                  value={entry.gender}
+                  onChange={(e) => setEntry({ ...entry, gender: e.target.value as Gender })}
+                  className="rounded-lg border border-black/15 bg-transparent px-3 py-2 outline-none focus:border-emerald-500 dark:border-white/20"
+                >
+                  <option value="">-</option>
+                  <option value="F">F</option>
+                  <option value="M">M</option>
+                </select>
+              </label>
+              <div className="flex items-end">
+                <button
+                  onClick={addEntry}
+                  className="w-full rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 sm:w-auto"
+                >
+                  Add player
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs opacity-50">
+              Press Enter to add and keep typing. The rating can be left blank now and
+              filled in from the table below.
+            </p>
+
+            <div className="mt-4 border-t border-black/10 pt-4 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setBulkOpen(!bulkOpen)}
+                className="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
+              >
+                {bulkOpen ? "- Hide the paste box" : "+ Paste a whole list at once"}
+              </button>
+              {bulkOpen && (
+                <div className="mt-3">
+                  <textarea
+                    value={bulkText}
+                    onChange={(e) => setBulkText(e.target.value)}
+                    rows={6}
+                    placeholder={"Jane Doe, 3.5, F\nJohn Smith, 4.0, M\nPat Lee 3.0 F"}
+                    className="w-full rounded-lg border border-black/15 bg-transparent px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500 dark:border-white/20"
+                  />
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={applyBulk}
+                      disabled={bulkCount === 0}
+                      className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
+                    >
+                      Add {bulkCount} player{bulkCount === 1 ? "" : "s"}
+                    </button>
+                    <p className="text-xs opacity-50">
+                      One player per line: name, rating, gender. Commas optional; rating
+                      and gender may be left off.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {source !== null && entryMsg && (
+          <p
+            className={`mt-3 text-xs ${
+              entryMsg.kind === "error"
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-emerald-700 dark:text-emerald-400"
+            }`}
+          >
+            {entryMsg.text}
           </p>
         )}
       </section>
@@ -225,8 +492,20 @@ export default function Home() {
           <Stat label="Players" value={String(validCount)} />
           <Stat label="Women" value={String(women)} />
           <Stat label="Men" value={String(men)} />
-          <Stat label="Unspecified" value={String(unspecified)} muted />
-          <Stat label="Courts in play" value={String(courtsInPlay)} />
+          <Stat
+            label="No gender set"
+            value={String(unspecified)}
+            muted={!needsGender || unspecified === 0}
+            warn={needsGender && unspecified > 0}
+          />
+          <Stat
+            label={
+              format === "same" && layout
+                ? `Courts (${layout.menCourts}M / ${layout.womenCourts}W)`
+                : "Courts in play"
+            }
+            value={String(courtsInPlay)}
+          />
         </section>
       )}
 
@@ -235,13 +514,18 @@ export default function Home() {
         <section className="mb-6 rounded-xl border border-black/10 p-5 dark:border-white/15">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-semibold">2. Review &amp; edit roster</h2>
-            <button onClick={addRow} className="text-sm text-emerald-700 hover:underline dark:text-emerald-400">
-              + Add player
-            </button>
+            <div className="flex items-center gap-4">
+              <button onClick={addRow} className="text-sm text-emerald-700 hover:underline dark:text-emerald-400">
+                + Add blank row
+              </button>
+              <button onClick={clearRoster} className="text-sm opacity-50 hover:text-red-600 hover:opacity-100">
+                Clear roster
+              </button>
+            </div>
           </div>
           <div className="max-h-96 overflow-auto rounded-lg border border-black/10 dark:border-white/10">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-black/5 dark:bg-white/10">
+              <thead className="sticky top-0 bg-neutral-100 dark:bg-neutral-800">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">#</th>
                   <th className="px-3 py-2 text-left font-medium">Name</th>
@@ -299,10 +583,24 @@ export default function Home() {
               </tbody>
             </table>
           </div>
-          {byesEach > 0 && (
+          {overCap && (
+            <p className="mt-3 text-xs text-red-600 dark:text-red-400">
+              {validCount} players exceeds the {MAX_PLAYERS}-player cap. Remove{" "}
+              {validCount - MAX_PLAYERS} to generate a schedule.
+            </p>
+          )}
+          {preview.problem && (
             <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
-              {validCount} players with {numCourts} court(s) means {byesEach} player(s) sit
-              out each round on a fair rotation ({courtsInPlay} courts in play).
+              {preview.problem}
+            </p>
+          )}
+          {layout && byesEach > 0 && (
+            <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              {validCount} players on {courtsInPlay} court(s) means {byesEach} player(s)
+              sit out each round on a fair rotation
+              {format !== "open" &&
+                ` (${layout.menByes} men, ${layout.womenByes} women)`}
+              .
             </p>
           )}
         </section>
@@ -312,6 +610,35 @@ export default function Home() {
       {rows.length > 0 && (
         <section className="mb-6 rounded-xl border border-black/10 p-5 dark:border-white/15">
           <h2 className="mb-4 font-semibold">3. Event settings</h2>
+
+          <div className="mb-5">
+            <p className="mb-2 text-sm opacity-70">Tournament format</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {FORMATS.map((f) => (
+                <button
+                  key={f.value}
+                  type="button"
+                  onClick={() => setFormat(f.value)}
+                  aria-pressed={format === f.value}
+                  className={`rounded-lg border p-3 text-left transition ${
+                    format === f.value
+                      ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40"
+                      : "border-black/15 hover:border-black/30 dark:border-white/20 dark:hover:border-white/40"
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{f.label}</span>
+                  <span className="mt-1 block text-xs opacity-60">{f.blurb}</span>
+                </button>
+              ))}
+            </div>
+            {needsGender && unspecified > 0 && (
+              <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                {unspecified} player(s) still need a gender set in the roster above
+                for this format.
+              </p>
+            )}
+          </div>
+
           <div className="flex flex-wrap gap-6">
             <label className="flex flex-col gap-1 text-sm">
               <span className="opacity-70">Courts</span>
@@ -363,6 +690,22 @@ export default function Home() {
                 </label>
               ))}
             </div>
+            <p className="mt-2 text-xs opacity-60">
+              {venueGroups.length > 1 ? (
+                <>
+                  Read as {venueGroups.length} venues:{" "}
+                  {venueGroups.map((g) => g.join(" + ")).join(", ")}. Courts that share
+                  a name are treated as walkable; the schedule keeps players at one
+                  venue as much as it can without changing who they play.
+                </>
+              ) : (
+                <>
+                  All {numCourts} courts read as one venue, so only court changes are
+                  minimised. Give courts names like &quot;Shorebird 1&quot; and
+                  &quot;Dolphin 1&quot; if they are far apart.
+                </>
+              )}
+            </p>
           </div>
 
           <button
@@ -379,9 +722,16 @@ export default function Home() {
       {schedule && metrics && (
         <section className="rounded-xl border border-black/10 p-5 dark:border-white/15">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="font-semibold text-emerald-700 dark:text-emerald-400">
-              Schedule ready - no repeated partnerships ✓
-            </h2>
+            <div>
+              <h2 className="font-semibold text-emerald-700 dark:text-emerald-400">
+                Schedule ready - no repeated partnerships ✓
+              </h2>
+              <p className="mt-1 text-xs opacity-60">
+                {FORMATS.find((f) => f.value === schedule.format)?.label}
+                {schedule.format === "same" &&
+                  ` - ${schedule.layout.menCourts} men's court(s), ${schedule.layout.womenCourts} women's court(s)`}
+              </p>
+            </div>
             <button
               onClick={download}
               className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
@@ -390,11 +740,35 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="mb-6 grid grid-cols-3 gap-3">
+          <div className="mb-3 grid grid-cols-3 gap-3">
             <Stat label="Avg court spread" value={metrics.spread} big />
             <Stat label="Avg team gap" value={metrics.gap} big />
             <Stat label="Widest court" value={metrics.maxSpread} big />
           </div>
+
+          {travel && (
+            <div className="mb-6">
+              <div className="grid grid-cols-3 gap-3">
+                <Stat
+                  label="Stay on the same court"
+                  value={`${Math.round((100 * travel.stays) / Math.max(1, travel.transitions))}%`}
+                  big
+                />
+                <Stat label="Venue changes, all players" value={String(travel.drives)} big />
+                <Stat
+                  label="Never change venue"
+                  value={`${travel.neverDrive}/${schedule.players.length}`}
+                  big
+                />
+              </div>
+              <p className="mt-2 text-xs opacity-60">
+                Of {travel.transitions} moves between matches, {travel.stays} keep the
+                player on the same court, {travel.walks} are a walk to the other court
+                at the same venue and {travel.drives} cross venues. Court assignment
+                does not affect who plays whom, so this costs nothing in match quality.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-6">
             {schedule.rounds.map((rnd) => (
@@ -405,6 +779,9 @@ export default function Home() {
                     <thead className="bg-black/5 dark:bg-white/10">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium">Court</th>
+                        {schedule.format === "same" && (
+                          <th className="px-3 py-2 text-left font-medium">Draw</th>
+                        )}
                         <th className="px-3 py-2 text-left font-medium">Team A</th>
                         <th className="px-3 py-2 text-center font-medium">Lvl</th>
                         <th className="px-3 py-2 text-center font-medium"></th>
@@ -421,6 +798,19 @@ export default function Home() {
                             <td className="px-3 py-2 font-medium">
                               {courtName(m.court, usedCourtNames)}
                             </td>
+                            {schedule.format === "same" && (
+                              <td className="px-3 py-2">
+                                <span
+                                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                    m.group === "M"
+                                      ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200"
+                                      : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
+                                  }`}
+                                >
+                                  {drawLabel(m)}
+                                </span>
+                              </td>
+                            )}
                             <td className="px-3 py-2">
                               {schedule.players[m.teamA[0]].name} &amp; {schedule.players[m.teamA[1]].name}
                             </td>
@@ -444,20 +834,108 @@ export default function Home() {
                 </div>
                 {rnd.byes.length > 0 && (
                   <p className="mt-1 text-xs opacity-60">
-                    Byes: {rnd.byes.map((i) => schedule.players[i].name).join(", ")}
+                    Byes:{" "}
+                    {rnd.byes
+                      .map((i) => {
+                        const p = schedule.players[i];
+                        return schedule.format === "open" || !p.gender
+                          ? p.name
+                          : `${p.name} (${p.gender})`;
+                      })
+                      .join(", ")}
                   </p>
                 )}
               </div>
             ))}
           </div>
+          <details className="mt-8 rounded-lg border border-black/10 p-4 dark:border-white/10">
+            <summary className="cursor-pointer text-sm font-medium">
+              Where each player goes
+            </summary>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-black/5 dark:bg-white/10">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Player</th>
+                    {schedule.rounds.map((r) => (
+                      <th key={r.number} className="px-3 py-2 text-left font-medium">
+                        R{r.number}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {playerStats(schedule)
+                    .slice()
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((st) => {
+                      const trail = st.courtsByRound;
+                      return (
+                        <tr key={st.name} className="border-t border-black/5 dark:border-white/5">
+                          <td className="px-3 py-1.5 font-medium">{st.name}</td>
+                          {trail.map((c, i) => {
+                            const prev = trail.slice(0, i).filter((x) => x !== null).pop();
+                            const same = c !== null && c === prev;
+                            return (
+                              <td
+                                key={i}
+                                className={`px-3 py-1.5 ${
+                                  c === null
+                                    ? "opacity-40"
+                                    : same
+                                      ? "opacity-60"
+                                      : "font-medium"
+                                }`}
+                              >
+                                {c === null ? "bye" : courtName(c, usedCourtNames)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs opacity-50">
+              Bold marks a court change from the player&apos;s previous match. The same
+              table is in the Excel download, on the By Player sheet.
+            </p>
+          </details>
         </section>
       )}
 
       <footer className="mt-10 text-center text-xs opacity-40">
-        Doubles mixer - up to {MAX_COURTS} courts, {MAX_COURTS * PLAYERS_PER_COURT} players on
-        court - courts grouped by level, unique partners every round.
+        Doubles mixer - open, mixed, or same-gender - up to {MAX_COURTS} courts,{" "}
+        {MAX_COURTS * PLAYERS_PER_COURT} players on court - courts grouped by level,
+        unique partners every round.
       </footer>
     </main>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded-lg border px-4 py-2 text-sm font-medium transition ${
+        active
+          ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
+          : "border-black/15 hover:border-black/30 dark:border-white/20 dark:hover:border-white/40"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -466,17 +944,21 @@ function Stat({
   value,
   big,
   muted,
+  warn,
 }: {
   label: string;
   value: string;
   big?: boolean;
   muted?: boolean;
+  warn?: boolean;
 }) {
   return (
     <div
-      className={`rounded-lg border border-black/10 p-3 text-center dark:border-white/10 ${
-        muted ? "opacity-60" : ""
-      }`}
+      className={`rounded-lg border p-3 text-center ${
+        warn
+          ? "border-amber-400 text-amber-700 dark:text-amber-300"
+          : "border-black/10 dark:border-white/10"
+      } ${muted ? "opacity-60" : ""}`}
     >
       <div className={big ? "text-2xl font-bold" : "text-xl font-bold"}>{value}</div>
       <div className="mt-1 text-xs opacity-60">{label}</div>
