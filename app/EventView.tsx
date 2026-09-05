@@ -1,13 +1,21 @@
 "use client";
 
 /**
- * The score-entry and leaderboard screen, opened on a phone at the court side.
+ * What a club member sees: one published mixer, in three tabs.
  *
- * Everyone with the link sees the same thing and may enter any court's result,
- * which is deliberate: at a club mixer, whoever finishes first types the score
- * in, and chasing per-court logins would cost more than it protects. The court
- * filter below is a convenience for a captain who only wants their own match,
- * not a permission.
+ *   Schedule     who is on which court, every round
+ *   Results      the score for each match, and the box to enter it
+ *   Leaderboard  games won, ranked, overall and by gender
+ *
+ * Up to v5 this screen was reached only by a per-event link and opened straight
+ * onto score entry. Members were really arriving to answer "where am I playing?"
+ * first, so the schedule now leads, with a "find me" picker that pulls one
+ * person's day out of a wall of twenty-four names.
+ *
+ * Anyone with the link may enter any court's result, which is deliberate: at a
+ * club mixer whoever finishes first types the score in, and chasing per-court
+ * logins would cost more than it protects. Generating and publishing are the
+ * parts that are gated, over in /admin.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -15,6 +23,7 @@ import {
   FORMATS,
   courtName,
   drawLabel,
+  type Match,
   type Schedule,
 } from "@/lib/scheduler";
 import {
@@ -38,21 +47,26 @@ interface EventData {
 /** Per-match save state, so a phone on a weak signal can see what happened. */
 type SaveState = "saving" | "saved" | "error";
 
+type Tab = "schedule" | "results" | "board";
+
 const POLL_MS = 10_000;
 const COURT_FILTER_KEY = "tennis-scorer-court";
+/** Remembered by name, not index: next week's schedule renumbers everybody. */
+const ME_KEY = "tennis-scorer-me";
 
 /** Wall-clock read, kept out of the component so it stays free of impure calls. */
 function nowMs(): number {
   return Date.now();
 }
 
-export default function Scoreboard({ id }: { id: string }) {
+export default function EventView({ id }: { id: string }) {
   const [data, setData] = useState<EventData | null>(null);
   const [scores, setScores] = useState<Scores>({});
   const [loadError, setLoadError] = useState("");
-  const [tab, setTab] = useState<"enter" | "board">("enter");
+  const [tab, setTab] = useState<Tab>("schedule");
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
   const [courtFilter, setCourtFilter] = useState<number | "all">("all");
+  const [meName, setMeName] = useState<string>("");
   const [lastSync, setLastSync] = useState<number | null>(null);
 
   // Scores the user has just set but which the server has not confirmed yet.
@@ -117,24 +131,36 @@ export default function Scoreboard({ id }: { id: string }) {
     };
   }, [data, id]);
 
-  // The remembered court can only be read after hydration: localStorage does
-  // not exist on the server, and seeding it into the initial state would make
-  // the server and client markup disagree. So it is deliberately a post-mount
-  // state update, which is exactly what this rule warns about in general.
+  // The remembered court and player can only be read after hydration:
+  // localStorage does not exist on the server, and seeding it into the initial
+  // state would make the server and client markup disagree. So it is
+  // deliberately a post-mount state update, which is what this rule warns
+  // about in general.
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(COURT_FILTER_KEY);
+      const savedCourt = localStorage.getItem(COURT_FILTER_KEY);
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (saved) setCourtFilter(saved === "all" ? "all" : Number(saved));
+      if (savedCourt) setCourtFilter(savedCourt === "all" ? "all" : Number(savedCourt));
+      const savedMe = localStorage.getItem(ME_KEY);
+      if (savedMe) setMeName(savedMe);
     } catch {
-      // Private browsing; the filter just starts at "all".
+      // Private browsing; both simply start unset.
     }
   }, []);
 
   function chooseCourt(v: number | "all") {
     setCourtFilter(v);
+    remember(COURT_FILTER_KEY, String(v));
+  }
+
+  function chooseMe(name: string) {
+    setMeName(name);
+    remember(ME_KEY, name);
+  }
+
+  function remember(key: string, value: string) {
     try {
-      localStorage.setItem(COURT_FILTER_KEY, String(v));
+      localStorage.setItem(key, value);
     } catch {
       // Nothing to do; the choice simply will not be remembered.
     }
@@ -200,6 +226,14 @@ export default function Scoreboard({ id }: { id: string }) {
     return [...set].sort((a, b) => a - b);
   }, [data]);
 
+  // The remembered name is matched back to a seat in *this* schedule, so a
+  // member who was here last week is still found, and one who is not playing
+  // today simply comes back unmatched.
+  const meIndex = useMemo(() => {
+    if (!data || !meName) return -1;
+    return data.schedule.players.findIndex((p) => p.name === meName);
+  }, [data, meName]);
+
   if (loadError) {
     return (
       <main className="mx-auto max-w-md p-6">
@@ -248,15 +282,29 @@ export default function Scoreboard({ id }: { id: string }) {
       </header>
 
       <div className="mb-4 flex gap-2">
-        <TabButton active={tab === "enter"} onClick={() => setTab("enter")}>
-          Enter scores
+        <TabButton active={tab === "schedule"} onClick={() => setTab("schedule")}>
+          Schedule
+        </TabButton>
+        <TabButton active={tab === "results"} onClick={() => setTab("results")}>
+          Results
         </TabButton>
         <TabButton active={tab === "board"} onClick={() => setTab("board")}>
           Leaderboard
         </TabButton>
       </div>
 
-      {tab === "enter" ? (
+      {tab === "schedule" && (
+        <ScheduleView
+          schedule={s}
+          names={names}
+          scores={scores}
+          meIndex={meIndex}
+          meName={meName}
+          onChooseMe={chooseMe}
+        />
+      )}
+
+      {tab === "results" && (
         <>
           <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
             <label className="opacity-70" htmlFor="court-filter">
@@ -317,8 +365,14 @@ export default function Scoreboard({ id }: { id: string }) {
             );
           })}
         </>
-      ) : (
-        <LeaderboardView board={board} onDownload={downloadExcel} hasByes={s.layout.byesPerRound > 0} />
+      )}
+
+      {tab === "board" && (
+        <LeaderboardView
+          board={board}
+          onDownload={downloadExcel}
+          hasByes={s.layout.byesPerRound > 0}
+        />
       )}
     </main>
   );
@@ -344,6 +398,191 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+// ---- schedule --------------------------------------------------------------
+/**
+ * The draw, read-only. The point of this tab is the question a member actually
+ * arrives with, so picking a name puts that person's whole day in one strip at
+ * the top and marks their match in every round below.
+ */
+function ScheduleView({
+  schedule: s,
+  names,
+  scores,
+  meIndex,
+  meName,
+  onChooseMe,
+}: {
+  schedule: Schedule;
+  names: string[];
+  scores: Scores;
+  meIndex: number;
+  meName: string;
+  onChooseMe: (name: string) => void;
+}) {
+  const roster = useMemo(
+    () =>
+      s.players
+        .map((p, i) => ({ name: p.name, i }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [s.players]
+  );
+
+  const isMine = (m: Match) =>
+    meIndex >= 0 && [...m.teamA, ...m.teamB].includes(meIndex);
+
+  // Where the chosen player is each round, byes included.
+  const myDay = useMemo(() => {
+    if (meIndex < 0) return [];
+    return s.rounds.map((rnd) => {
+      const m = rnd.matches.find((mm) => [...mm.teamA, ...mm.teamB].includes(meIndex));
+      return { round: rnd.number, court: m ? courtName(m.court, names) : null };
+    });
+  }, [s.rounds, meIndex, names]);
+
+  // A name may be remembered from a previous mixer that this one does not
+  // include, which is worth saying rather than silently ignoring.
+  const notPlaying = meName !== "" && meIndex < 0;
+
+  return (
+    <section>
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+        <label className="opacity-70" htmlFor="me">
+          Find me
+        </label>
+        <select
+          id="me"
+          value={meIndex >= 0 ? meName : ""}
+          onChange={(e) => onChooseMe(e.target.value)}
+          className="rounded-lg border border-black/15 bg-transparent px-2 py-1.5 dark:border-white/20"
+        >
+          <option value="">Everyone</option>
+          {roster.map((r) => (
+            <option key={r.i} value={r.name}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs opacity-50">Remembered on this phone.</span>
+      </div>
+
+      {notPlaying && (
+        <p className="mb-4 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          {meName} is not on today&apos;s roster. Pick a name from the list, or ask the
+          organiser.
+        </p>
+      )}
+
+      {myDay.length > 0 && (
+        <div className="mb-5 rounded-xl border border-emerald-700/30 bg-emerald-50/50 p-3 dark:bg-emerald-950/20">
+          <h2 className="text-sm font-semibold">{meName}&apos;s day</h2>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {myDay.map((d) => (
+              <span
+                key={d.round}
+                className={`rounded-lg px-2.5 py-1.5 text-xs ${
+                  d.court
+                    ? "bg-white/70 dark:bg-white/10"
+                    : "bg-black/5 opacity-60 dark:bg-white/5"
+                }`}
+              >
+                <span className="opacity-60">R{d.round}</span>{" "}
+                <span className="font-medium">{d.court ?? "sitting out"}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {s.rounds.map((rnd) => (
+        <section key={rnd.number} className="mb-5">
+          <h2 className="mb-2 text-sm font-semibold">Round {rnd.number}</h2>
+          <div className="space-y-2">
+            {[...rnd.matches]
+              .sort((a, b) => a.court - b.court)
+              .map((m) => {
+                const games = readScore(scores, rnd.number, m.court);
+                const mine = isMine(m);
+                return (
+                  <div
+                    key={m.court}
+                    className={`rounded-xl border p-3 ${
+                      mine
+                        ? "border-emerald-600/60 bg-emerald-50/60 dark:bg-emerald-950/25"
+                        : "border-black/10 dark:border-white/15"
+                    }`}
+                  >
+                    <div className="mb-1.5 flex items-center justify-between text-xs">
+                      <span className="font-medium opacity-70">
+                        {courtName(m.court, names)}
+                        {s.format === "same" && ` · ${drawLabel(m)}`}
+                      </span>
+                      {games === null ? (
+                        <span className="opacity-40">not played yet</span>
+                      ) : (
+                        <span className="tabular-nums opacity-70">
+                          {games} - {GAMES_PER_MATCH - games}
+                        </span>
+                      )}
+                    </div>
+                    <TeamLine
+                      schedule={s}
+                      team={m.teamA}
+                      meIndex={meIndex}
+                      won={games !== null && games > GAMES_PER_MATCH - games}
+                    />
+                    <div className="my-1 text-xs opacity-40">v</div>
+                    <TeamLine
+                      schedule={s}
+                      team={m.teamB}
+                      meIndex={meIndex}
+                      won={games !== null && GAMES_PER_MATCH - games > games}
+                    />
+                  </div>
+                );
+              })}
+          </div>
+          {rnd.byes.length > 0 && (
+            <p className="mt-2 text-xs opacity-50">
+              Sitting out:{" "}
+              {rnd.byes.map((i, k) => (
+                <span key={i} className={i === meIndex ? "font-semibold opacity-100" : ""}>
+                  {s.players[i].name}
+                  {k < rnd.byes.length - 1 ? ", " : ""}
+                </span>
+              ))}
+            </p>
+          )}
+        </section>
+      ))}
+    </section>
+  );
+}
+
+function TeamLine({
+  schedule: s,
+  team,
+  meIndex,
+  won,
+}: {
+  schedule: Schedule;
+  team: number[];
+  meIndex: number;
+  won: boolean;
+}) {
+  return (
+    <div className={`text-sm ${won ? "font-semibold" : ""}`}>
+      {team.map((i, k) => (
+        <span key={i}>
+          <span className={i === meIndex ? "rounded bg-emerald-600/20 px-1 font-semibold" : ""}>
+            {s.players[i].name}
+          </span>
+          {k === 0 ? " & " : ""}
+        </span>
+      ))}
+    </div>
   );
 }
 
