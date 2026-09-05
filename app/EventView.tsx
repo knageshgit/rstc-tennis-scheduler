@@ -26,6 +26,7 @@ import {
   type Match,
   type Schedule,
 } from "@/lib/scheduler";
+import Byes from "./Byes";
 import {
   GAMES_PER_MATCH,
   leaderboards,
@@ -267,6 +268,10 @@ export default function EventView({ id }: { id: string }) {
         <p className="mt-1 text-xs opacity-60">
           {FORMATS.find((f) => f.value === s.format)?.label} · {s.players.length} players ·{" "}
           {s.rounds.length} rounds · every match is {GAMES_PER_MATCH} games
+          {/* Said once at the top as well as per round, so nobody is surprised
+              to find themselves off a court partway down the page. */}
+          {s.layout.byesPerRound > 0 &&
+            ` · ${s.layout.byesPerRound} sitting out each round`}
         </p>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/15">
           <div
@@ -356,11 +361,9 @@ export default function EventView({ id }: { id: string }) {
                     />
                   ))}
                 </div>
-                {rnd.byes.length > 0 && courtFilter === "all" && (
-                  <p className="mt-2 text-xs opacity-50">
-                    Sitting out: {rnd.byes.map((i) => s.players[i].name).join(", ")}
-                  </p>
-                )}
+                {/* Shown whatever the court filter is: filtering to one court
+                    must not hide who is not on a court at all. */}
+                <Byes schedule={s} byes={rnd.byes} meIndex={meIndex} />
               </section>
             );
           })}
@@ -544,17 +547,7 @@ function ScheduleView({
                 );
               })}
           </div>
-          {rnd.byes.length > 0 && (
-            <p className="mt-2 text-xs opacity-50">
-              Sitting out:{" "}
-              {rnd.byes.map((i, k) => (
-                <span key={i} className={i === meIndex ? "font-semibold opacity-100" : ""}>
-                  {s.players[i].name}
-                  {k < rnd.byes.length - 1 ? ", " : ""}
-                </span>
-              ))}
-            </p>
-          )}
+          <Byes schedule={s} byes={rnd.byes} meIndex={meIndex} />
         </section>
       ))}
     </section>

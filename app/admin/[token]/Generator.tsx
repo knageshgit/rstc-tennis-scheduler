@@ -30,6 +30,7 @@ import {
   venueOf,
 } from "@/lib/scheduler";
 import { parseBulkRoster, type Row } from "@/lib/roster";
+import Byes from "@/app/Byes";
 import { GAMES_PER_MATCH } from "@/lib/scoring";
 
 function toRows(roster: RosterRow[]): Row[] {
@@ -1056,19 +1057,7 @@ export default function Generator({
                     </tbody>
                   </table>
                 </div>
-                {rnd.byes.length > 0 && (
-                  <p className="mt-1 text-xs opacity-60">
-                    Byes:{" "}
-                    {rnd.byes
-                      .map((i) => {
-                        const p = schedule.players[i];
-                        return schedule.format === "open" || !p.gender
-                          ? p.name
-                          : `${p.name} (${p.gender})`;
-                      })
-                      .join(", ")}
-                  </p>
-                )}
+                <Byes schedule={schedule} byes={rnd.byes} showGender />
               </div>
             ))}
           </div>
