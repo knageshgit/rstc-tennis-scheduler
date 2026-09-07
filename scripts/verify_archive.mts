@@ -117,6 +117,49 @@ check(
 );
 check("the archive row validates as one", isArchiveEntry(done));
 
+// ---- the two podiums -------------------------------------------------------
+// The club reports a mixer as the top three men and the top three women, so
+// those are what the archive has to carry.
+const men = done.podium!.men;
+const women = done.podium!.women;
+check("the men's podium is filled", men.length >= 3);
+check("the women's podium is filled", women.length >= 3);
+check("nobody places below third", [...men, ...women].every((p) => p.rank <= 3));
+check(
+  "the men's podium holds only men",
+  men.every((p) => schedule.players.find((q) => q.name === p.name)?.gender === "M")
+);
+check(
+  "the women's podium holds only women",
+  women.every((p) => schedule.players.find((q) => q.name === p.name)?.gender === "F")
+);
+check("places run in order", men.every((p, i) => i === 0 || p.rank >= men[i - 1].rank));
+check(
+  "games run downwards",
+  men.every((p, i) => i === 0 || p.games <= men[i - 1].games),
+  JSON.stringify(men)
+);
+check("first place really is first", men[0].rank === 1 && women[0].rank === 1);
+check(
+  "a podium place carries its games total",
+  men.every((p) => typeof p.games === "number" && p.games > 0)
+);
+check(
+  "the overall champion appears on one of the two podiums",
+  [...men, ...women].some((p) => p.name === done.champions[0])
+);
+
+// Ties share a place, so a podium may hold more than three names - dropping
+// one of four players level on second would be wrong.
+check(
+  "tied players share a place",
+  (() => {
+    const ranks = men.map((p) => p.rank);
+    return new Set(ranks).size <= ranks.length;
+  })()
+);
+
+
 // A tournament closed out with matches still missing.
 const partial: Scores = { [matchKey(1, 1)]: 5, [matchKey(1, 2)]: 8 };
 const half = summarize(ev, partial, "2026-09-05");
@@ -132,6 +175,19 @@ eq("and reports no games", none.championGames, 0);
 // A bad date falls back to the day it was published rather than throwing.
 eq("a malformed date falls back to the publish date", summarize(ev, {}, "not-a-date").date, "2026-09-04");
 eq("an empty date falls back too", summarize(ev, {}, "").date, "2026-09-04");
+
+// Nothing scored: no places to award, but the shape is still there to render.
+eq("an unscored event awards no men's places", none.podium!.men, []);
+eq("an unscored event awards no women's places", none.podium!.women, []);
+
+// A partly scored tournament still ranks whoever has played.
+check("a partly scored event still has a podium", half.podium!.men.length > 0 || half.podium!.women.length > 0);
+
+// A row from before podiums were recorded must still validate, so the page can
+// fall back to the overall champion rather than dropping the row.
+const legacy = { ...done } as Partial<ArchiveEntry>;
+delete legacy.podium;
+check("a row with no podium is still a valid row", isArchiveEntry(legacy));
 
 // ---- ordering --------------------------------------------------------------
 const row = (id: string, date: string, archivedAt = 0): ArchiveEntry => ({

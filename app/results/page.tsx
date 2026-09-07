@@ -18,7 +18,12 @@
  */
 import Link from "next/link";
 
-import { bySeason, formatLabel, type ArchiveEntry } from "@/lib/archive";
+import {
+  bySeason,
+  formatLabel,
+  type ArchiveEntry,
+  type Standing,
+} from "@/lib/archive";
 import type { Format } from "@/lib/scheduler";
 import { getArchive, isStoreConfigured } from "@/lib/store";
 
@@ -117,8 +122,8 @@ function ResultsTable({ entries }: { entries: ArchiveEntry[] }) {
               <th className="w-px px-3 py-3 whitespace-nowrap">Date</th>
               <th className="px-3 py-3">Mixer</th>
               <th className="hidden w-px px-3 py-3 whitespace-nowrap sm:table-cell">Format</th>
-              <th className="hidden w-px px-3 py-3 text-right sm:table-cell">Players</th>
-              <th className="px-3 py-3">Winner</th>
+              <th className="px-3 py-3">Top 3 men</th>
+              <th className="px-3 py-3">Top 3 women</th>
               <th className="w-px px-3 py-3" />
             </tr>
           </thead>
@@ -139,22 +144,43 @@ function ResultsTable({ entries }: { entries: ArchiveEntry[] }) {
                   <span className="font-medium">
                     {e.title || <span className="opacity-40">Club mixer</span>}
                   </span>
-                  {/* What the hidden columns were carrying, folded in below the
-                      name so a phone loses no information. */}
-                  <span className="mt-1 flex flex-wrap items-center gap-1.5 sm:hidden">
-                    <FormatBadge format={e.format} />
-                    <span className="text-xs opacity-60">{e.players} players</span>
+                  {/* The format badge folds in here only on a phone, where it
+                      has no column of its own; the roster size folds in at
+                      every width, having given its column to the podiums. */}
+                  <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="sm:hidden">
+                      <FormatBadge format={e.format} />
+                    </span>
+                    <span className="text-xs opacity-60">
+                      {e.players} players · {e.rounds} rounds
+                    </span>
                   </span>
+                  {!e.complete && (
+                    <span
+                      className="mt-1 block text-xs opacity-50"
+                      title={`${e.entered} of ${e.total} matches scored`}
+                    >
+                      {e.entered} of {e.total} matches scored
+                    </span>
+                  )}
                 </td>
                 <td className="hidden px-3 py-3 align-top sm:table-cell">
                   <FormatBadge format={e.format} />
                 </td>
-                <td className="hidden px-3 py-3 text-right align-top tabular-nums sm:table-cell">
-                  {e.players}
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <Champion entry={e} />
-                </td>
+                {e.podium ? (
+                  <>
+                    <td className="px-3 py-3 align-top">
+                      <Podium places={e.podium.men} />
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      <Podium places={e.podium.women} />
+                    </td>
+                  </>
+                ) : (
+                  <td className="px-3 py-3 align-top" colSpan={2}>
+                    <LegacyResult entry={e} />
+                  </td>
+                )}
                 <td className="px-3 py-3 text-right align-top whitespace-nowrap">
                   <Link
                     href={`/e/${e.id}?tab=board`}
@@ -182,48 +208,75 @@ function FormatBadge({ format }: { format: Format }) {
   );
 }
 
+/** Gold, silver, bronze. Anything past third shares bronze's treatment. */
+const PLACE_STYLES = [
+  "bg-amber-200 text-amber-900 dark:bg-amber-400/25 dark:text-amber-200",
+  "bg-slate-200 text-slate-700 dark:bg-slate-400/25 dark:text-slate-200",
+  "bg-orange-200/70 text-orange-900 dark:bg-orange-400/20 dark:text-orange-200",
+];
+
 /**
- * Who won, and an honest note when that is not yet settled.
+ * The top three of one draw, which is how the club has always read a result.
  *
- * A tournament can be archived with matches still unscored - somebody forgets
- * to enter a court and the organiser closes it out anyway - and quietly naming
- * a winner off a partial table would be wrong.
+ * A tournament can be archived with matches unscored - somebody forgets to
+ * enter a court and the organiser closes it out anyway - so a placing is only
+ * shown once there is something to place on, and the row says how much is
+ * missing under the mixer name.
+ *
  */
-function Champion({ entry }: { entry: ArchiveEntry }) {
-  if (entry.champions.length === 0) {
-    return <span className="text-xs opacity-50">Not scored</span>;
+function Podium({ places }: { places: Standing[] }) {
+  if (places.length === 0) {
+    return <span className="text-xs opacity-40">&mdash;</span>;
   }
   return (
-    <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
-      <span aria-hidden>🏆</span>
-      <span className="font-semibold">{entry.champions.join(", ")}</span>
-      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900 tabular-nums dark:bg-amber-500/15 dark:text-amber-300">
-        {entry.championGames} games
-      </span>
-      {!entry.complete && (
-        <span
-          className="text-xs opacity-50"
-          title={`${entry.entered} of ${entry.total} matches scored`}
-        >
-          (partial)
-        </span>
-      )}
+    <ol className="space-y-1">
+      {places.map((p, i) => (
+        <li key={`${p.rank}-${p.name}`} className="flex items-baseline gap-2 whitespace-nowrap">
+          <span
+            className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums ${
+              PLACE_STYLES[Math.min(p.rank, 3) - 1] ?? PLACE_STYLES[2]
+            }`}
+          >
+            {p.rank}
+          </span>
+          <span className={i === 0 ? "font-semibold" : ""}>{p.name}</span>
+          <span className="ml-auto pl-2 text-xs opacity-60 tabular-nums">{p.games}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/**
+ * A row filed before v8.1, which recorded only the overall winner.
+ *
+ * One fact, so one cell across both podium columns rather than the same
+ * sentence printed twice. Re-archiving the tournament fills the podiums in.
+ */
+function LegacyResult({ entry }: { entry: ArchiveEntry }) {
+  if (entry.champions.length === 0) {
+    return <span className="text-xs opacity-40">Not scored</span>;
+  }
+  return (
+    <span className="text-xs opacity-60">
+      Top three not recorded &middot; overall winner{" "}
+      <span className="font-semibold opacity-100">{entry.champions.join(", ")}</span>
     </span>
   );
 }
 
 /**
- * "Sat 5 Sep 2026" from "2026-09-05".
+ * "Sat, Sep 5, 2026" from "2026-09-05".
  *
  * Parsed as UTC and rendered as UTC. The string is a calendar date with no
  * timezone of its own, and letting the server's zone shift it would print the
  * day before to anyone west of London.
  */
 function longDate(iso: string): string {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
     weekday: "short",
-    day: "numeric",
     month: "short",
+    day: "numeric",
     year: "numeric",
     timeZone: "UTC",
   });
