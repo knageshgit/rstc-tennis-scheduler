@@ -10,8 +10,9 @@ import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 
 import { ADMIN_COOKIE, adminConfig, checkCookie, checkToken } from "@/lib/admin";
-import { getCurrentEventId } from "@/lib/store";
+import { getArchive, getCurrentEventId } from "@/lib/store";
 
+import ArchivePanel from "./ArchivePanel";
 import Generator from "./Generator";
 import PinGate from "./PinGate";
 
@@ -37,7 +38,8 @@ export default async function AdminPage({
   }
 
   const { open } = adminConfig();
-  const liveId = await getCurrentEventId();
+  // Both reads are independent, and the page renders nothing until it has both.
+  const [liveId, archive] = await Promise.all([getCurrentEventId(), getArchive()]);
 
   return (
     <>
@@ -49,6 +51,7 @@ export default async function AdminPage({
         </div>
       )}
       <Generator liveId={liveId} />
+      <ArchivePanel liveId={liveId} initial={archive} />
     </>
   );
 }

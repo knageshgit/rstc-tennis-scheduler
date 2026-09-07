@@ -33,12 +33,17 @@
  */
 import { Redis } from "@upstash/redis";
 
+import {
+  isArchiveEntry,
+  sortArchive,
+  summarize,
+  type ArchiveEntry,
+} from "./archive";
+
 import { MAX_COURTS, type Schedule } from "./scheduler";
+import { isValidEventId, newEventId } from "./eventid";
 import { isValidGames, parseMatchKey, matchKey, type Scores } from "./scoring";
 
-/** An unambiguous alphabet: no O/0, I/1, or similar look-alikes to mistype. */
-const ID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-const ID_LENGTH = 6;
 
 /**
  * How long a published event sticks around. Long enough that no live mixer
@@ -56,6 +61,11 @@ export interface StoredEvent {
   schedule: Schedule;
 }
 
+// The code helpers live in `lib/eventid` so the organiser's browser can use
+// them without importing this file. Re-exported because the routes and tests
+// already reach for them here.
+export { isValidEventId, newEventId, normalizeEventId } from "./eventid";
+
 // ---- keys ------------------------------------------------------------------
 /** The event record itself. Exported so the tests can assert the namespacing. */
 export const eventKey = (id: string) => `ev:${id}`;
@@ -63,6 +73,14 @@ export const eventKey = (id: string) => `ev:${id}`;
 export const scoresKey = (id: string) => `ev:${id}:scores`;
 /** Which event the club link points at. A single key, overwritten in place. */
 export const CURRENT_KEY = "cur";
+/**
+ * The results archive: one hash, field per event code, value a summary row.
+ *
+ * A hash rather than a sorted set because the page needs the whole row, not
+ * just the ordering, and `HGETALL` fetches every finished tournament in one
+ * command. Ordering is a text comparison on the date and belongs in JS.
+ */
+export const ARCHIVE_KEY = "arch";
 
 // ---- the client ------------------------------------------------------------
 /**
@@ -78,10 +96,18 @@ export interface StoreClient {
     opts?: { nx?: true; ex?: number }
   ): Promise<string | null>;
   del(...keys: string[]): Promise<number>;
+  hget<T>(key: string, field: string): Promise<T | null>;
   hgetall<T extends Record<string, unknown>>(key: string): Promise<T | null>;
   hset(key: string, kv: Record<string, unknown>): Promise<number>;
   hdel(key: string, ...fields: string[]): Promise<number>;
-  expire(key: string, seconds: number): Promise<number>;
+  /**
+   * `mode` is Redis's own conditional expiry. "XX" means "only if this key
+   * already has an expiry", which is what keeps an archived tournament
+   * permanent even when somebody corrects a score months later.
+   */
+  expire(key: string, seconds: number, mode?: "XX" | "NX"): Promise<number>;
+  /** Remove a key's expiry, so it lives until it is deleted by hand. */
+  persist(key: string): Promise<number>;
 }
 
 /**
@@ -124,34 +150,6 @@ function db(): StoreClient {
   return client;
 }
 
-// ---- event codes -----------------------------------------------------------
-/** A short, human-readable, hard-to-guess event code. */
-export function newEventId(): string {
-  const bytes = new Uint8Array(ID_LENGTH);
-  crypto.getRandomValues(bytes);
-  let out = "";
-  for (const b of bytes) out += ID_ALPHABET[b % ID_ALPHABET.length];
-  return out;
-}
-
-/**
- * Clean up a code typed or pasted by hand. The alphabet already leaves out the
- * characters people confuse (0/O and 1/I/l), so there is nothing to fold: this
- * only upper-cases and drops spaces, dashes and any other stray punctuation.
- */
-export function normalizeEventId(raw: string): string {
-  return raw
-    .trim()
-    .toUpperCase()
-    .split("")
-    .filter((c) => ID_ALPHABET.includes(c))
-    .join("");
-}
-
-/** Does this look like a code we could have issued? */
-export function isValidEventId(id: string): boolean {
-  return id.length === ID_LENGTH && normalizeEventId(id) === id;
-}
 
 /**
  * Is this a schedule we can safely store and later render?
@@ -269,11 +267,20 @@ export async function setScore(
     return;
   }
   await redis.hset(key, { [field]: games });
-  // The hash is created by the first HSET and so has no expiry of its own.
-  // Setting it on every write also means an event being actively scored keeps
-  // both halves of itself alive.
-  await redis.expire(key, EVENT_TTL_SECONDS);
-  await redis.expire(eventKey(id), EVENT_TTL_SECONDS);
+
+  // Keep the event alive while it is being scored, but never resurrect the
+  // expiry on one that has been archived: archiving strips the TTL to keep a
+  // finished tournament for good, and a plain EXPIRE here would quietly put a
+  // 180-day clock back on it the first time somebody corrected a score.
+  //
+  // "XX" means "only if this key already has an expiry", so the event key
+  // answers the question for us: 1 says it is a live event and both halves
+  // should be pushed out, 0 says it is archived and the scores must be made
+  // permanent too. The scores hash cannot answer it itself, because the first
+  // HSET creates it with no expiry at all and XX would leave it that way.
+  const live = await redis.expire(eventKey(id), EVENT_TTL_SECONDS, "XX");
+  if (live) await redis.expire(key, EVENT_TTL_SECONDS);
+  else await redis.persist(key);
 }
 
 // ---- the club link ---------------------------------------------------------
@@ -311,5 +318,75 @@ export async function getCurrentEventId(): Promise<string | null> {
     return typeof id === "string" && isValidEventId(id) ? id : null;
   } catch {
     return null; // Storage is unreachable; the root page says so politely.
+  }
+}
+
+// ---- the results archive ---------------------------------------------------
+/**
+ * File a finished tournament in the archive, and stop it expiring.
+ *
+ * Two writes that have to happen together in spirit: the summary row goes into
+ * the archive hash, and the event loses its TTL so the row it points at is
+ * still there to open. They are separate commands, so the order matters -
+ * persist first, then index. Persisting an event nothing links to is invisible;
+ * a row pointing at an event that expires is a dead link on a members page.
+ *
+ * Re-archiving an event that is already in is deliberately allowed: HSET
+ * overwrites the field, which is how a corrected score gets a corrected
+ * champion.
+ */
+export async function archiveEvent(id: string, date: string): Promise<ArchiveEntry | null> {
+  const redis = db();
+  const ev = await getEvent(id);
+  if (!ev) return null;
+  const entry = summarize(ev, await getScores(id), date);
+  await redis.persist(eventKey(id));
+  await redis.persist(scoresKey(id));
+  await redis.hset(ARCHIVE_KEY, { [id]: entry });
+  return entry;
+}
+
+/**
+ * Take a tournament back out of the archive.
+ *
+ * Needed while the club is trialling the app, when the archive fills up with
+ * practice runs. This puts the TTL back rather than deleting anything, so an
+ * event removed by mistake is still there to re-archive, and one removed on
+ * purpose eventually clears itself out.
+ */
+export async function unarchiveEvent(id: string): Promise<void> {
+  const redis = db();
+  await redis.hdel(ARCHIVE_KEY, id);
+  await redis.expire(eventKey(id), EVENT_TTL_SECONDS);
+  await redis.expire(scoresKey(id), EVENT_TTL_SECONDS);
+}
+
+/**
+ * Every finished tournament, newest first, in one command.
+ *
+ * A row that does not parse is dropped rather than thrown: an archive written
+ * by an older version should cost the club one missing line on the results
+ * page, not the whole page.
+ */
+export async function getArchive(): Promise<ArchiveEntry[]> {
+  if (!isStoreConfigured()) return [];
+  try {
+    const raw = await db().hgetall<Record<string, unknown>>(ARCHIVE_KEY);
+    if (!raw) return [];
+    return sortArchive(Object.values(raw).filter(isArchiveEntry));
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    return [];
+  }
+}
+
+/** Is this event already in the archive? One field, not the whole hash. */
+export async function getArchiveEntry(id: string): Promise<ArchiveEntry | null> {
+  try {
+    const row = await db().hget<unknown>(ARCHIVE_KEY, id);
+    return isArchiveEntry(row) ? row : null;
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    return null;
   }
 }
