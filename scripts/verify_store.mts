@@ -171,6 +171,10 @@ class FakeRedis implements StoreClient {
     }
     return n;
   }
+  async hget<T>(key: string, field: string): Promise<T | null> {
+    const raw = this.hashes.get(key)?.get(field);
+    return raw === undefined ? null : (JSON.parse(raw) as T);
+  }
   async hgetall<T extends Record<string, unknown>>(key: string): Promise<T | null> {
     const h = this.hashes.get(key);
     if (!h || h.size === 0) return null;
@@ -190,10 +194,21 @@ class FakeRedis implements StoreClient {
     if (h.size === 0) this.hashes.delete(key);
     return n;
   }
-  async expire(key: string, seconds: number) {
+  async expire(key: string, seconds: number, mode?: "XX" | "NX") {
     const live = this.strings.has(key) || this.hashes.has(key);
-    if (live) this.ttl.set(key, seconds);
-    return live ? 1 : 0;
+    if (!live) return 0;
+    // The conditional forms the store relies on: XX only refreshes a key that
+    // already has an expiry, NX only sets one on a key that has none.
+    if (mode === "XX" && !this.ttl.has(key)) return 0;
+    if (mode === "NX" && this.ttl.has(key)) return 0;
+    this.ttl.set(key, seconds);
+    return 1;
+  }
+  async persist(key: string) {
+    const live = this.strings.has(key) || this.hashes.has(key);
+    if (!live || !this.ttl.has(key)) return 0;
+    this.ttl.delete(key);
+    return 1;
   }
   /** Write straight into a hash, to plant values the store did not produce. */
   plant(key: string, field: string, raw: string) {

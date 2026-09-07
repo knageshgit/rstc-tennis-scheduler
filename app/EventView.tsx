@@ -18,6 +18,7 @@
  * parts that are gated, over in /admin.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 
 import {
   FORMATS,
@@ -60,11 +61,23 @@ function nowMs(): number {
   return Date.now();
 }
 
-export default function EventView({ id }: { id: string }) {
+export default function EventView({
+  id,
+  /**
+   * Which tab to open on. The archive links straight to the leaderboard, since
+   * somebody arriving from the results page has already said what they want to
+   * see; everywhere else the schedule leads, because a member opening the club
+   * link is asking where they are playing.
+   */
+  initialTab = "schedule",
+}: {
+  id: string;
+  initialTab?: Tab;
+}) {
   const [data, setData] = useState<EventData | null>(null);
   const [scores, setScores] = useState<Scores>({});
   const [loadError, setLoadError] = useState("");
-  const [tab, setTab] = useState<Tab>("schedule");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
   const [courtFilter, setCourtFilter] = useState<number | "all">("all");
   const [meName, setMeName] = useState<string>("");
@@ -377,6 +390,14 @@ export default function EventView({ id }: { id: string }) {
           hasByes={s.layout.byesPerRound > 0}
         />
       )}
+
+      {/* The way back to previous mixers. Kept to a footer line because the
+          question this page exists to answer is about today. */}
+      <footer className="mt-8 border-t border-black/10 pt-4 text-xs opacity-60 dark:border-white/15">
+        <Link href="/results" className="underline underline-offset-2">
+          Past tournament results
+        </Link>
+      </footer>
     </main>
   );
 }
