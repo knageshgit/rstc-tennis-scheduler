@@ -75,12 +75,14 @@ export default async function ResultsPage({
               morning wants today's draw, not last month's winner. */}
           <Link
             href="/"
-            className="mt-4 inline-flex items-center gap-2 rounded-full bg-emerald-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+            className="mt-4 inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
           >
             🎾 Today&rsquo;s mixer
           </Link>
         </header>
       )}
+
+      <h2 className="mb-3 text-lg font-bold tracking-tight">Past tournaments</h2>
 
       {archive.length === 0 ? (
         <p className="rounded-xl border border-dashed border-black/15 p-8 text-center text-sm opacity-60 dark:border-white/20">
