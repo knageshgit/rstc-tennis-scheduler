@@ -38,7 +38,12 @@ export default function Photos({
   const [queue, setQueue] = useState<Queued[]>([]);
   const [open, setOpen] = useState<PhotoMeta | null>(null);
   const [loadError, setLoadError] = useState("");
-  const input = useRef<HTMLInputElement>(null);
+  // Two inputs rather than one, because the only difference that matters is the
+  // `capture` attribute: with it the phone goes straight to the camera, without
+  // it the phone offers the photo library. One input cannot be both, and which
+  // one somebody wants is not something the page can guess.
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const libraryInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -72,12 +77,12 @@ export default function Photos({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  async function onFiles(list: FileList | null) {
+  async function onFiles(list: FileList | null, from: HTMLInputElement | null) {
     if (!list?.length) return;
     const files = [...list];
     // Clear the input straight away, so choosing the same photo twice in a row
     // still fires a change event.
-    if (input.current) input.current.value = "";
+    if (from) from.value = "";
 
     for (const file of files) {
       const key = `${file.name}-${file.lastModified}-${Math.random()}`;
@@ -117,29 +122,46 @@ export default function Photos({
 
   return (
     <section>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <button
-          onClick={() => input.current?.click()}
+          onClick={() => cameraInput.current?.click()}
           disabled={full}
           className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-40 dark:bg-blue-600 dark:hover:bg-blue-500"
         >
           📷 Take a photo
         </button>
+        <button
+          onClick={() => libraryInput.current?.click()}
+          disabled={full}
+          className="inline-flex items-center gap-2 rounded-xl border border-blue-600/40 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-600 hover:text-white disabled:opacity-40 dark:border-blue-400/40 dark:text-blue-300 dark:hover:bg-blue-600 dark:hover:text-white"
+        >
+          🖼️ Upload
+        </button>
+        {/* `capture` sends a phone straight to the camera. A laptop has no
+            camera to send it to and shows the file picker either way, so both
+            buttons still do something sensible there. */}
         <input
-          ref={input}
+          ref={cameraInput}
           type="file"
           accept="image/*"
-          // Opens the rear camera on a phone, and the file picker everywhere
-          // else. Both are what somebody pressing this button expects.
           capture="environment"
-          multiple
-          onChange={(e) => onFiles(e.target.files)}
+          onChange={(e) => onFiles(e.target.files, e.target)}
           className="hidden"
         />
-        <p className="text-xs opacity-60">
+        {/* No `capture`, so this offers the photo library, and takes several at
+            once: pictures from earlier in the morning arrive in a batch. */}
+        <input
+          ref={libraryInput}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={(e) => onFiles(e.target.files, e.target)}
+          className="hidden"
+        />
+        <p className="w-full text-xs opacity-60 sm:w-auto">
           {full
             ? `This mixer has reached its limit of ${MAX_PHOTOS_PER_EVENT} photos.`
-            : `Everyone with this link can see them. ${count} of ${MAX_PHOTOS_PER_EVENT} used.`}
+            : `Take one now, or add pictures you already have. Everyone with this link can see them. ${count} of ${MAX_PHOTOS_PER_EVENT} used.`}
         </p>
       </div>
 
