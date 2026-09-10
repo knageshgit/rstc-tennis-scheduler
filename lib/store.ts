@@ -34,6 +34,11 @@
 import { Redis } from "@upstash/redis";
 
 import {
+  isPhotoMeta,
+  sortPhotos,
+  type PhotoMeta,
+} from "./photos";
+import {
   isArchiveEntry,
   sortArchive,
   summarize,
@@ -73,6 +78,12 @@ export const eventKey = (id: string) => `ev:${id}`;
 export const scoresKey = (id: string) => `ev:${id}:scores`;
 /** Which event the club link points at. A single key, overwritten in place. */
 export const CURRENT_KEY = "cur";
+/** Metadata for one event's photos: field per photo, value a `PhotoMeta`. */
+export const photosKey = (id: string) => `ev:${id}:photos`;
+/** The full-size image bytes for one photo, base64. Its own key, fetched alone. */
+export const photoKey = (id: string, photo: string) => `ev:${id}:ph:${photo}`;
+/** The grid thumbnail, so a gallery of forty does not pull forty full images. */
+export const thumbKey = (id: string, photo: string) => `ev:${id}:pht:${photo}`;
 /**
  * The results archive: one hash, field per event code, value a summary row.
  *
@@ -342,6 +353,14 @@ export async function archiveEvent(id: string, date: string): Promise<ArchiveEnt
   const entry = summarize(ev, await getScores(id), date);
   await redis.persist(eventKey(id));
   await redis.persist(scoresKey(id));
+  // The photos are part of the tournament, so they keep for as long as it does.
+  // Without this an archived mixer would quietly lose its pictures after 180
+  // days while its leaderboard stayed, which is the worse half to lose.
+  await redis.persist(photosKey(id));
+  for (const photo of await listPhotos(id)) {
+    await redis.persist(photoKey(id, photo.id));
+    await redis.persist(thumbKey(id, photo.id));
+  }
   await redis.hset(ARCHIVE_KEY, { [id]: entry });
   return entry;
 }
@@ -359,6 +378,11 @@ export async function unarchiveEvent(id: string): Promise<void> {
   await redis.hdel(ARCHIVE_KEY, id);
   await redis.expire(eventKey(id), EVENT_TTL_SECONDS);
   await redis.expire(scoresKey(id), EVENT_TTL_SECONDS);
+  await redis.expire(photosKey(id), EVENT_TTL_SECONDS);
+  for (const photo of await listPhotos(id)) {
+    await redis.expire(photoKey(id, photo.id), EVENT_TTL_SECONDS);
+    await redis.expire(thumbKey(id, photo.id), EVENT_TTL_SECONDS);
+  }
 }
 
 /**
@@ -389,4 +413,88 @@ export async function getArchiveEntry(id: string): Promise<ArchiveEntry | null> 
     if (err instanceof StoreUnavailableError) throw err;
     return null;
   }
+}
+
+// ---- photos -----------------------------------------------------------------
+/**
+ * Photos taken during a mixer.
+ *
+ * Three keys per event rather than one: the metadata for every photo in a
+ * single hash, and each image's bytes under a key of their own. That split is
+ * the whole design. The gallery needs to know what exists, which is one
+ * `HGETALL` of a few hundred bytes, and only then fetches the images it is
+ * actually going to show, one request each, straight through the CDN. Keeping
+ * the bytes in the metadata hash would mean every gallery view pulled every
+ * photo whether it displayed them or not.
+ *
+ * Photos live and die with their tournament. `addPhoto` copies whatever expiry
+ * the event currently has, so a photo added to an archived mixer is permanent
+ * and one added to a live mixer expires with it, and archiving persists them
+ * alongside the scores.
+ */
+export async function addPhoto(
+  id: string,
+  meta: PhotoMeta,
+  full: string,
+  thumb: string
+): Promise<void> {
+  const redis = db();
+  await redis.set(photoKey(id, meta.id), full);
+  await redis.set(thumbKey(id, meta.id), thumb);
+  await redis.hset(photosKey(id), { [meta.id]: meta });
+
+  // Match the event's own lifetime. `expire ... XX` returns 1 while the event
+  // is still on the clock and 0 once it has been archived, which is exactly the
+  // question being asked, and costs no extra round trip.
+  const live = await redis.expire(eventKey(id), EVENT_TTL_SECONDS, "XX");
+  for (const key of [photoKey(id, meta.id), thumbKey(id, meta.id), photosKey(id)]) {
+    if (live) await redis.expire(key, EVENT_TTL_SECONDS);
+    else await redis.persist(key);
+  }
+}
+
+/** Every photo on this event, oldest first. Metadata only, no image bytes. */
+export async function listPhotos(id: string): Promise<PhotoMeta[]> {
+  try {
+    const raw = await db().hgetall<Record<string, unknown>>(photosKey(id));
+    if (!raw) return [];
+    return sortPhotos(Object.values(raw).filter(isPhotoMeta));
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    return [];
+  }
+}
+
+/** One image's bytes, base64. `size` picks the full copy or the thumbnail. */
+export async function getPhotoBytes(
+  id: string,
+  photo: string,
+  size: "full" | "thumb"
+): Promise<string | null> {
+  const key = size === "full" ? photoKey(id, photo) : thumbKey(id, photo);
+  const raw = await db().get<string>(key);
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Remove one photo, bytes and all.
+ *
+ * Deleting the metadata first would leave the bytes stranded under a key
+ * nothing lists, so nothing would ever clean them up; deleting the bytes first
+ * leaves at worst a tile that fails to load, which the gallery already handles
+ * and which the next delete tidies away.
+ */
+export async function deletePhoto(id: string, photo: string): Promise<void> {
+  const redis = db();
+  await redis.del(photoKey(id, photo), thumbKey(id, photo));
+  await redis.hdel(photosKey(id), photo);
+}
+
+/** What this event's photos weigh, for the organiser's usage line. */
+export async function photoUsage(id: string): Promise<{ count: number; bytes: number }> {
+  const photos = await listPhotos(id);
+  return {
+    count: photos.length,
+    bytes: photos.reduce((sum, p) => sum + (p.bytes || 0), 0),
+  };
 }

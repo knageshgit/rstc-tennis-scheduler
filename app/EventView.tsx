@@ -28,6 +28,7 @@ import {
   type Schedule,
 } from "@/lib/scheduler";
 import Byes from "./Byes";
+import Photos from "./Photos";
 import {
   GAMES_PER_MATCH,
   leaderboards,
@@ -49,7 +50,7 @@ interface EventData {
 /** Per-match save state, so a phone on a weak signal can see what happened. */
 type SaveState = "saving" | "saved" | "error";
 
-type Tab = "schedule" | "results" | "board";
+type Tab = "schedule" | "results" | "board" | "photos";
 
 const POLL_MS = 10_000;
 const COURT_FILTER_KEY = "tennis-scorer-court";
@@ -309,6 +310,9 @@ export default function EventView({
         <TabButton active={tab === "board"} onClick={() => setTab("board")}>
           Leaderboard
         </TabButton>
+        <TabButton active={tab === "photos"} onClick={() => setTab("photos")}>
+          Photos
+        </TabButton>
       </div>
 
       {tab === "schedule" && (
@@ -391,6 +395,10 @@ export default function EventView({
         />
       )}
 
+      {/* Mounted only while it is the open tab: the gallery polls and fetches
+          images, and none of that should run behind the scoreboard. */}
+      {tab === "photos" && <Photos eventId={id} meName={meName || undefined} />}
+
       {/* The way back to previous mixers. Kept to a footer line because the
           question this page exists to answer is about today. */}
       <footer className="mt-8 border-t border-black/10 pt-4 text-xs opacity-60 dark:border-white/15">
@@ -414,7 +422,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+      className={`flex-1 rounded-lg px-1.5 py-2 text-xs font-medium transition-colors sm:px-3 sm:text-sm ${
         active
           ? "bg-emerald-700 text-white"
           : "bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/15"
