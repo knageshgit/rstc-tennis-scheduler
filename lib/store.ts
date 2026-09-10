@@ -34,6 +34,11 @@
 import { Redis } from "@upstash/redis";
 
 import {
+  isChatMessage,
+  sortMessages,
+  type ChatMessage,
+} from "./chat";
+import {
   isPhotoMeta,
   sortPhotos,
   type PhotoMeta,
@@ -84,6 +89,8 @@ export const photosKey = (id: string) => `ev:${id}:photos`;
 export const photoKey = (id: string, photo: string) => `ev:${id}:ph:${photo}`;
 /** The grid thumbnail, so a gallery of forty does not pull forty full images. */
 export const thumbKey = (id: string, photo: string) => `ev:${id}:pht:${photo}`;
+/** One event's chat: field per message, value a `ChatMessage`. */
+export const chatKey = (id: string) => `ev:${id}:chat`;
 /**
  * The results archive: one hash, field per event code, value a summary row.
  *
@@ -357,6 +364,7 @@ export async function archiveEvent(id: string, date: string): Promise<ArchiveEnt
   // Without this an archived mixer would quietly lose its pictures after 180
   // days while its leaderboard stayed, which is the worse half to lose.
   await redis.persist(photosKey(id));
+  await redis.persist(chatKey(id));
   for (const photo of await listPhotos(id)) {
     await redis.persist(photoKey(id, photo.id));
     await redis.persist(thumbKey(id, photo.id));
@@ -379,6 +387,7 @@ export async function unarchiveEvent(id: string): Promise<void> {
   await redis.expire(eventKey(id), EVENT_TTL_SECONDS);
   await redis.expire(scoresKey(id), EVENT_TTL_SECONDS);
   await redis.expire(photosKey(id), EVENT_TTL_SECONDS);
+  await redis.expire(chatKey(id), EVENT_TTL_SECONDS);
   for (const photo of await listPhotos(id)) {
     await redis.expire(photoKey(id, photo.id), EVENT_TTL_SECONDS);
     await redis.expire(thumbKey(id, photo.id), EVENT_TTL_SECONDS);
@@ -497,4 +506,46 @@ export async function photoUsage(id: string): Promise<{ count: number; bytes: nu
     count: photos.length,
     bytes: photos.reduce((sum, p) => sum + (p.bytes || 0), 0),
   };
+}
+
+// ---- chat -------------------------------------------------------------------
+/**
+ * The mixer chat: one hash, a field per message.
+ *
+ * The same shape as the scores and for the same reason. Six people typing at
+ * once each write their own field, so no message can overwrite another, and
+ * reading the conversation is a single `HGETALL`. A list would have been the
+ * obvious choice and would also have worked, but a hash keyed by message id is
+ * what makes deleting one message a single command instead of a read, filter
+ * and rewrite of the whole conversation.
+ */
+export async function addMessage(id: string, message: ChatMessage): Promise<void> {
+  const redis = db();
+  await redis.hset(chatKey(id), { [message.id]: message });
+  // Match whatever lifetime the event has, exactly as photos do.
+  const live = await redis.expire(eventKey(id), EVENT_TTL_SECONDS, "XX");
+  if (live) await redis.expire(chatKey(id), EVENT_TTL_SECONDS);
+  else await redis.persist(chatKey(id));
+}
+
+/** The whole conversation, oldest first. */
+export async function listMessages(id: string): Promise<ChatMessage[]> {
+  try {
+    const raw = await db().hgetall<Record<string, unknown>>(chatKey(id));
+    if (!raw) return [];
+    return sortMessages(Object.values(raw).filter(isChatMessage));
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    return [];
+  }
+}
+
+/** Remove one message. Organisers only, enforced at the route. */
+export async function deleteMessage(id: string, message: string): Promise<void> {
+  await db().hdel(chatKey(id), message);
+}
+
+/** Remove the whole conversation, which is the only way to reset a full chat. */
+export async function clearChat(id: string): Promise<void> {
+  await db().del(chatKey(id));
 }

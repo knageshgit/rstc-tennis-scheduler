@@ -22,7 +22,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   };
 }
 
-const TABS = ["schedule", "results", "board", "photos"] as const;
+const TABS = ["schedule", "results", "board", "photos", "chat"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function EventPage({

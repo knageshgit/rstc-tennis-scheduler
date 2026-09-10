@@ -28,6 +28,7 @@ import {
   type Schedule,
 } from "@/lib/scheduler";
 import Byes from "./Byes";
+import Chat from "./Chat";
 import Photos from "./Photos";
 import {
   GAMES_PER_MATCH,
@@ -50,7 +51,7 @@ interface EventData {
 /** Per-match save state, so a phone on a weak signal can see what happened. */
 type SaveState = "saving" | "saved" | "error";
 
-type Tab = "schedule" | "results" | "board" | "photos";
+type Tab = "schedule" | "results" | "board" | "photos" | "chat";
 
 const POLL_MS = 10_000;
 const COURT_FILTER_KEY = "tennis-scorer-court";
@@ -308,10 +309,14 @@ export default function EventView({
           Results
         </TabButton>
         <TabButton active={tab === "board"} onClick={() => setTab("board")}>
-          Leaderboard
+          <span className="sm:hidden">Board</span>
+          <span className="hidden sm:inline">Leaderboard</span>
         </TabButton>
         <TabButton active={tab === "photos"} onClick={() => setTab("photos")}>
           Photos
+        </TabButton>
+        <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
+          Chat
         </TabButton>
       </div>
 
@@ -398,6 +403,10 @@ export default function EventView({
       {/* Mounted only while it is the open tab: the gallery polls and fetches
           images, and none of that should run behind the scoreboard. */}
       {tab === "photos" && <Photos eventId={id} meName={meName || undefined} />}
+
+      {/* Mounted only while open, like the gallery: it polls, and that should
+          not run behind the scoreboard. */}
+      {tab === "chat" && <Chat eventId={id} meName={meName || undefined} />}
 
       {/* The way back to previous mixers. Kept to a footer line because the
           question this page exists to answer is about today. */}
