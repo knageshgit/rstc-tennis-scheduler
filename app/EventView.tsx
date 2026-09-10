@@ -28,6 +28,7 @@ import {
   type Schedule,
 } from "@/lib/scheduler";
 import Byes from "./Byes";
+import Logo from "./Logo";
 import Chat from "./Chat";
 import Photos from "./Photos";
 import {
@@ -274,9 +275,15 @@ export default function EventView({
   return (
     <main className="mx-auto max-w-3xl p-4 pb-24 sm:p-6">
       <header className="mb-4">
-        <div className="flex items-baseline justify-between gap-3">
-          <h1 className="text-lg font-semibold">{data.title || "Tennis mixer"}</h1>
-          <span className="rounded bg-black/5 px-2 py-0.5 font-mono text-xs tracking-widest dark:bg-white/10">
+        <div className="flex items-center justify-between gap-3">
+          {/* The badge sits to the left of the mixer name, and the pair take
+              the width; the code stays pinned to the right. min-w-0 lets a long
+              mixer name truncate rather than shove the code off the screen. */}
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Logo />
+            <h1 className="truncate text-lg font-semibold">{data.title || "Tennis mixer"}</h1>
+          </div>
+          <span className="shrink-0 rounded bg-black/5 px-2 py-0.5 font-mono text-xs tracking-widest dark:bg-white/10">
             {data.id}
           </span>
         </div>
