@@ -13,6 +13,7 @@ import { ADMIN_COOKIE, adminConfig, checkCookie, checkToken } from "@/lib/admin"
 import { getArchive, getCurrentEventId } from "@/lib/store";
 
 import ArchivePanel from "./ArchivePanel";
+import PhotoAdmin from "./PhotoAdmin";
 import Generator from "./Generator";
 import PinGate from "./PinGate";
 
@@ -51,6 +52,7 @@ export default async function AdminPage({
         </div>
       )}
       <Generator liveId={liveId} />
+      <PhotoAdmin liveId={liveId} />
       <ArchivePanel liveId={liveId} initial={archive} />
     </>
   );

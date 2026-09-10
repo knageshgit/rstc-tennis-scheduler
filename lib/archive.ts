@@ -22,7 +22,15 @@
  * Everything here is pure. The Redis side lives in `lib/store`.
  */
 import { FORMATS, type Format, type Schedule } from "./scheduler";
-import { leaderboards, type Scores } from "./scoring";
+import { leaderboards, type PlayerScore, type Scores } from "./scoring";
+
+/** One place on a podium. */
+export interface Standing {
+  /** 1, 2 or 3. Players level on games share a place, so this can repeat. */
+  rank: number;
+  name: string;
+  games: number;
+}
 
 /** What the results table shows for one finished tournament. */
 export interface ArchiveEntry {
@@ -49,6 +57,16 @@ export interface ArchiveEntry {
   champions: string[];
   /** Games won by the champion, so the row means something on its own. */
   championGames: number;
+  /**
+   * The top three men and the top three women, which is how the club has
+   * always reported a mixer.
+   *
+   * Stored rather than recomputed on the results page, for the same reason as
+   * everything else in this row: the page reads the archive and nothing else.
+   * Written by every version from v8.1; a row filed before that has none, and
+   * the page falls back to the overall champion until it is re-archived.
+   */
+  podium?: { men: Standing[]; women: Standing[] };
   /** Were all the matches scored when this was archived? */
   complete: boolean;
   /** Matches scored / matches scheduled, at archive time. */
@@ -88,6 +106,21 @@ export function isoDate(ms: number): string {
 }
 
 /**
+ * The players placing first, second or third in one table.
+ *
+ * Ties share a place, so this can return more than three names - four players
+ * level on second all placed second, and dropping one of them because a list
+ * was capped at three would be wrong. The cap is there only to stop a table
+ * where nobody has scored from returning the entire roster.
+ */
+function podium(rows: PlayerScore[]): Standing[] {
+  return rows
+    .filter((r) => r.rank <= 3 && r.games > 0)
+    .slice(0, 8)
+    .map((r) => ({ rank: r.rank, name: r.name, games: r.games }));
+}
+
+/**
  * Read a tournament's final standing into a row for the archive.
  *
  * Ties share the top rank, so "champions" is a list; `rankTable` has already
@@ -114,6 +147,7 @@ export function summarize(
     courts: courts.size,
     champions: winners.map((r) => r.name),
     championGames: winners[0]?.games ?? 0,
+    podium: { men: podium(board.men), women: podium(board.women) },
     complete: board.complete,
     entered: board.entered,
     total: board.total,
