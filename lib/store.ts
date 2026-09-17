@@ -53,6 +53,7 @@ import {
 import { MAX_COURTS, type Schedule } from "./scheduler";
 import { isValidEventId, newEventId } from "./eventid";
 import { isValidGames, parseMatchKey, matchKey, type Scores } from "./scoring";
+import { isRatingKey, isValidStars, type Ratings } from "./survey";
 
 
 /**
@@ -92,6 +93,17 @@ export const thumbKey = (id: string, photo: string) => `ev:${id}:pht:${photo}`;
 /** One event's chat: field per message, value a `ChatMessage`. */
 export const chatKey = (id: string) => `ev:${id}:chat`;
 /**
+ * One event's survey: field per rating, value a star count.
+ *
+ * The fourth hash on the same pattern as the scores, the photos and the chat,
+ * and for the fourth time the reason is concurrency. A round ends, eighteen
+ * phones rate their match within the same minute, and each writes its own
+ * field, so nobody's opinion can overwrite anybody else's. Changing a rating
+ * overwrites that one field; clearing it deletes the field, which is how "not
+ * rated" stays distinguishable from a deliberate one star.
+ */
+export const surveyKey = (id: string) => `ev:${id}:survey`;
+/**
  * The results archive: one hash, field per event code, value a summary row.
  *
  * A hash rather than a sorted set because the page needs the whole row, not
@@ -111,7 +123,13 @@ export interface StoreClient {
   set(
     key: string,
     value: unknown,
-    opts?: { nx?: true; ex?: number }
+    /**
+     * `keepTtl` is Redis's KEEPTTL: overwrite the value and leave the expiry
+     * alone. Without it a plain SET clears the TTL, which would silently make
+     * a live event permanent - or, on an archived one, hand a finished
+     * tournament a fresh 180-day clock.
+     */
+    opts?: { nx?: true; ex?: number; keepTtl?: true }
   ): Promise<string | null>;
   del(...keys: string[]): Promise<number>;
   hget<T>(key: string, field: string): Promise<T | null>;
@@ -244,6 +262,30 @@ export async function getEvent(id: string): Promise<StoredEvent | null> {
   }
 }
 
+/**
+ * Retitle a published event, leaving everything else exactly as it was.
+ *
+ * Until v11 the title was whatever the spreadsheet happened to be called, so
+ * the club's screen read "Copy of Players-v2026-09-15" on the morning of a
+ * tournament. Fixing that by republishing is not an option: publishing mints a
+ * new code and a new draw, and the draw is the one thing nobody wants touched
+ * once it is on the noticeboard. So this writes the one field.
+ *
+ * `keepTtl` is the whole reason this is not a two-line function. The event is
+ * a single JSON value, so changing the title means writing the value back, and
+ * a plain SET would drop whatever expiry the key carries: a live event would
+ * quietly become permanent, and an archived one - whose TTL was deliberately
+ * stripped - would be handed a 180-day clock and eventually vanish from the
+ * results page.
+ */
+export async function renameEvent(id: string, title: string): Promise<StoredEvent | null> {
+  const ev = await getEvent(id);
+  if (!ev) return null;
+  const updated: StoredEvent = { ...ev, title };
+  await db().set(eventKey(id), updated, { keepTtl: true });
+  return updated;
+}
+
 // ---- scores ----------------------------------------------------------------
 /**
  * Every score currently standing, as one `HGETALL`.
@@ -357,7 +399,7 @@ export async function archiveEvent(id: string, date: string): Promise<ArchiveEnt
   const redis = db();
   const ev = await getEvent(id);
   if (!ev) return null;
-  const entry = summarize(ev, await getScores(id), date);
+  const entry = summarize(ev, await getScores(id), date, await getRatings(id));
   await redis.persist(eventKey(id));
   await redis.persist(scoresKey(id));
   // The photos are part of the tournament, so they keep for as long as it does.
@@ -365,6 +407,9 @@ export async function archiveEvent(id: string, date: string): Promise<ArchiveEnt
   // days while its leaderboard stayed, which is the worse half to lose.
   await redis.persist(photosKey(id));
   await redis.persist(chatKey(id));
+  // The ratings are the only record of whether the draw was any good, which is
+  // the half of a tournament the leaderboard cannot show. They keep too.
+  await redis.persist(surveyKey(id));
   for (const photo of await listPhotos(id)) {
     await redis.persist(photoKey(id, photo.id));
     await redis.persist(thumbKey(id, photo.id));
@@ -388,6 +433,7 @@ export async function unarchiveEvent(id: string): Promise<void> {
   await redis.expire(scoresKey(id), EVENT_TTL_SECONDS);
   await redis.expire(photosKey(id), EVENT_TTL_SECONDS);
   await redis.expire(chatKey(id), EVENT_TTL_SECONDS);
+  await redis.expire(surveyKey(id), EVENT_TTL_SECONDS);
   for (const photo of await listPhotos(id)) {
     await redis.expire(photoKey(id, photo.id), EVENT_TTL_SECONDS);
     await redis.expire(thumbKey(id, photo.id), EVENT_TTL_SECONDS);
@@ -548,4 +594,54 @@ export async function deleteMessage(id: string, message: string): Promise<void> 
 /** Remove the whole conversation, which is the only way to reset a full chat. */
 export async function clearChat(id: string): Promise<void> {
   await db().del(chatKey(id));
+}
+
+// ---- the survey -------------------------------------------------------------
+/**
+ * Every star rating standing on this event, as one `HGETALL`.
+ *
+ * Filtered the same way the scores are, and for the same reason: the survey
+ * tab indexes into the schedule with these keys, so a field that is not a
+ * rating key with a legal 1-5 value is dropped rather than trusted.
+ */
+export async function getRatings(id: string): Promise<Ratings> {
+  try {
+    const raw = await db().hgetall<Record<string, unknown>>(surveyKey(id));
+    if (!raw) return {};
+    const out: Ratings = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (!isRatingKey(key)) continue;
+      const stars = typeof value === "string" ? Number(value) : value;
+      if (isValidStars(stars)) out[key] = stars;
+    }
+    return out;
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    return {};
+  }
+}
+
+/**
+ * Record one player's rating, or clear it when `stars` is null.
+ *
+ * One field of one hash, so two players rating the same match at the same
+ * moment cannot interfere. The expiry dance is the one `setScore` does: keep a
+ * live event alive while it is being rated, but never put a clock back on a
+ * tournament that has been archived.
+ */
+export async function setRating(
+  id: string,
+  field: string,
+  stars: number | null
+): Promise<void> {
+  const redis = db();
+  const key = surveyKey(id);
+  if (stars === null) {
+    await redis.hdel(key, field);
+    return;
+  }
+  await redis.hset(key, { [field]: stars });
+  const live = await redis.expire(eventKey(id), EVENT_TTL_SECONDS, "XX");
+  if (live) await redis.expire(key, EVENT_TTL_SECONDS);
+  else await redis.persist(key);
 }

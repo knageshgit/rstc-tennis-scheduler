@@ -22,9 +22,11 @@ import {
   bySeason,
   formatLabel,
   type ArchiveEntry,
+  type ArchiveSurvey,
   type Standing,
 } from "@/lib/archive";
 import type { Format } from "@/lib/scheduler";
+import { fmtStars, starBar } from "@/lib/survey";
 import { getArchive, isStoreConfigured } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -126,6 +128,7 @@ function ResultsTable({ entries }: { entries: ArchiveEntry[] }) {
               <th className="hidden w-px px-3 py-3 whitespace-nowrap sm:table-cell">Format</th>
               <th className="px-3 py-3">Top 3 men</th>
               <th className="px-3 py-3">Top 3 women</th>
+              <th className="hidden w-px px-3 py-3 lg:table-cell">Rated</th>
               <th className="w-px px-3 py-3" />
             </tr>
           </thead>
@@ -183,6 +186,14 @@ function ResultsTable({ entries }: { entries: ArchiveEntry[] }) {
                     <LegacyResult entry={e} />
                   </td>
                 )}
+                {/* Held back until lg. Below that the podium columns are
+                    already wrapping, and a seventh column pushed the
+                    Leaderboard button off the end of the table. A season of
+                    star bars is also not what somebody opens this page on
+                    their way to the club to find out. */}
+                <td className="hidden px-3 py-3 align-top lg:table-cell">
+                  <SurveyCell survey={e.survey} />
+                </td>
                 <td className="px-3 py-3 text-right align-top whitespace-nowrap">
                   <Link
                     href={`/e/${e.id}?tab=board`}
@@ -282,4 +293,42 @@ function longDate(iso: string): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+/**
+ * How a finished tournament was rated, for one row of the archive.
+ *
+ * Two numbers with different meanings, so both are shown rather than averaged
+ * together: the tournament as a whole, which is what players were asked at the
+ * end of the day, and the tennis, which is the mean of every individual match
+ * rating. A mixer can be a good morning built out of lopsided matches, or the
+ * reverse, and flattening the two would hide exactly the thing the survey was
+ * added to find.
+ *
+ * Rows archived before v11 carry no survey at all, and get a dash: that is not
+ * the same as a tournament nobody rated, which shows its zero counts honestly.
+ */
+function SurveyCell({ survey }: { survey?: ArchiveSurvey }) {
+  if (!survey) return <span className="text-xs opacity-30">–</span>;
+  if (survey.matches.count === 0 && survey.overall.count === 0) {
+    return <span className="text-xs opacity-40">not rated</span>;
+  }
+  return (
+    <div className="text-xs">
+      {survey.overall.count > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-amber-500">{starBar(survey.overall.avg)}</span>
+          <span className="font-semibold tabular-nums">{fmtStars(survey.overall.avg)}</span>
+        </div>
+      )}
+      {survey.matches.count > 0 && (
+        <div className="mt-0.5 opacity-60">tennis {fmtStars(survey.matches.avg)}</div>
+      )}
+      {/* Players, not ratings: one person leaves several, and mixing the two
+          units in one line reads as a response rate that it is not. */}
+      <div className="mt-0.5 opacity-40">
+        {survey.responders} player{survey.responders === 1 ? "" : "s"}
+      </div>
+    </div>
+  );
 }

@@ -96,6 +96,15 @@ export default function Generator({
   const [format, setFormat] = useState<Format>("open");
   const [courtNames, setCourtNames] = useState<string[]>([...DEFAULT_COURT_NAMES]);
   const [seed, setSeed] = useState("");
+  /**
+   * What the club will see this tournament called.
+   *
+   * Left empty on purpose rather than pre-filled from the spreadsheet. Until
+   * v11 the title *was* the filename, which is how a mixer went up in front of
+   * the club as "Copy of Players-v2026-09-15": a default nobody chose and
+   * therefore nobody noticed was wrong. An empty box asks the question.
+   */
+  const [title, setTitle] = useState("");
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [usedCourtNames, setUsedCourtNames] = useState<string[]>([...DEFAULT_COURT_NAMES]);
   const [error, setError] = useState<string>("");
@@ -319,7 +328,10 @@ export default function Generator({
         body: JSON.stringify({
           schedule,
           courtNames: usedCourtNames,
-          title: fileName ? fileName.replace(/\.xlsx?$/i, "") : "Tennis mixer",
+          // What the organiser typed, and nothing inferred. An empty name is
+          // a real answer: the members' page falls back to "Tennis mixer",
+          // which is better than the name of a spreadsheet.
+          title: title.trim(),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -786,6 +798,23 @@ export default function Generator({
                 for this format.
               </p>
             )}
+          </div>
+
+          <div className="mb-5">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="opacity-70">Tournament name</span>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={120}
+                placeholder="Saturday Mixer, 19 September"
+                className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+              />
+            </label>
+            <p className="mt-1 text-xs opacity-60">
+              Shown at the top of the members&apos; page and on the results archive.
+              Leave it empty and it reads &ldquo;Tennis mixer&rdquo;.
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-6">

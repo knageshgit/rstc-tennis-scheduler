@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * What a club member sees: one published mixer, in three tabs.
+ * What a club member sees: one published mixer, in tabs.
  *
  *   Schedule     who is on which court, every round
- *   Results      the score for each match, and the box to enter it
- *   Leaderboard  games won, ranked, overall and by gender
+ *   Results      the score for each match, the box to enter it, and how the
+ *                round was rated
+ *   Leaderboard  games won, ranked, overall and by gender, sortable
+ *   Survey       rate your own matches, and the day, out of five stars
  *
  * Up to v5 this screen was reached only by a per-event link and opened straight
  * onto score entry. Members were really arriving to answer "where am I playing?"
@@ -24,6 +26,7 @@ import {
   FORMATS,
   courtName,
   drawLabel,
+  playerTravel,
   type Match,
   type Schedule,
 } from "@/lib/scheduler";
@@ -39,6 +42,18 @@ import {
   type PlayerScore,
   type Scores,
 } from "@/lib/scoring";
+import {
+  MAX_STARS,
+  fmtStars,
+  matchesFor,
+  overallKey,
+  progressFor,
+  ratingKey,
+  starBar,
+  summarizeSurvey,
+  type Ratings,
+  type Tally,
+} from "@/lib/survey";
 
 interface EventData {
   id: string;
@@ -52,7 +67,7 @@ interface EventData {
 /** Per-match save state, so a phone on a weak signal can see what happened. */
 type SaveState = "saving" | "saved" | "error";
 
-type Tab = "schedule" | "results" | "board" | "photos" | "chat";
+type Tab = "schedule" | "results" | "board" | "survey" | "photos" | "chat";
 
 const POLL_MS = 10_000;
 const COURT_FILTER_KEY = "tennis-scorer-court";
@@ -85,11 +100,15 @@ export default function EventView({
   const [courtFilter, setCourtFilter] = useState<number | "all">("all");
   const [meName, setMeName] = useState<string>("");
   const [lastSync, setLastSync] = useState<number | null>(null);
+  const [ratings, setRatings] = useState<Ratings>({});
+  const [ratingState, setRatingState] = useState<Record<string, SaveState>>({});
 
   // Scores the user has just set but which the server has not confirmed yet.
   // Polling must not yank a value back out from under someone mid-entry, so
   // these win over the polled copy until their write lands.
   const pending = useRef<Set<string>>(new Set());
+  /** The same guard for ratings, which poll on their own timer. */
+  const pendingRatings = useRef<Set<string>>(new Set());
 
   // ---- load and poll -------------------------------------------------------
   const loadAll = useCallback(async () => {
@@ -102,6 +121,19 @@ export default function EventView({
     setData(ev);
     setScores(ev.scores ?? {});
     setLastSync(nowMs());
+
+    // A second call rather than another field on the event payload. Ratings
+    // are wanted by two tabs out of six, and the event payload is on the
+    // critical path of the page every member opens on arrival.
+    try {
+      const rres = await fetch(`/api/events/${id}/survey`, { cache: "no-store" });
+      if (rres.ok) {
+        const body: { ratings: Ratings } = await rres.json();
+        setRatings(body.ratings ?? {});
+      }
+    } catch {
+      // Nothing rated yet as far as this phone knows; the poll will catch up.
+    }
   }, [id]);
 
   useEffect(() => {
@@ -147,6 +179,45 @@ export default function EventView({
       document.removeEventListener("visibilitychange", tick);
     };
   }, [data, id]);
+
+  /**
+   * Ratings poll on the same clock as the scores, but only while a tab that
+   * shows them is open.
+   *
+   * The gallery and the chat already work this way, and here it is a cost
+   * decision as much as a tidiness one: v7 was thrown off Vercel Blob by a
+   * read path that ran on every poll from every phone. Eighteen phones sitting
+   * on the Schedule tab have no use for the survey, so they do not ask for it.
+   */
+  useEffect(() => {
+    if (!data) return;
+    if (tab !== "survey" && tab !== "results") return;
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const res = await fetch(`/api/events/${id}/survey`, { cache: "no-store" });
+        if (!res.ok) return;
+        const body: { ratings: Ratings } = await res.json();
+        setRatings((mine) => {
+          const merged = { ...body.ratings };
+          // Anything this phone has in flight wins, exactly as scores do.
+          for (const key of pendingRatings.current) {
+            if (key in mine) merged[key] = mine[key];
+            else delete merged[key];
+          }
+          return merged;
+        });
+      } catch {
+        // A dropped poll is not worth showing; the next one will catch up.
+      }
+    };
+    const timer = setInterval(tick, POLL_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [data, id, tab]);
 
   // The remembered court and player can only be read after hydration:
   // localStorage does not exist on the server, and seeding it into the initial
@@ -216,6 +287,45 @@ export default function EventView({
     }
   }
 
+  /**
+   * Record one star rating, optimistically.
+   *
+   * `round` and `court` are omitted for the end-of-day question about the
+   * tournament itself, which is the one rating every player can give whether
+   * or not they were on a court that round.
+   */
+  async function saveRating(
+    player: number,
+    stars: number | null,
+    at?: { round: number; court: number }
+  ) {
+    const key = at ? ratingKey(at.round, at.court, player) : overallKey(player);
+    setRatings((r) => {
+      const next = { ...r };
+      if (stars === null) delete next[key];
+      else next[key] = stars;
+      return next;
+    });
+    pendingRatings.current.add(key);
+    setRatingState((s) => ({ ...s, [key]: "saving" }));
+    try {
+      const res = await fetch(`/api/events/${id}/survey`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ player, stars, ...(at ?? {}) }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Save failed.");
+      }
+      pendingRatings.current.delete(key);
+      setRatingState((s) => ({ ...s, [key]: "saved" }));
+    } catch {
+      pendingRatings.current.delete(key);
+      setRatingState((s) => ({ ...s, [key]: "error" }));
+    }
+  }
+
   async function downloadExcel() {
     if (!data) return;
     const { buildScheduleWorkbook } = await import("@/lib/excel");
@@ -234,6 +344,11 @@ export default function EventView({
   const board = useMemo(
     () => (data ? leaderboards(data.schedule, scores) : null),
     [data, scores]
+  );
+
+  const survey = useMemo(
+    () => (data ? summarizeSurvey(data.schedule, ratings) : null),
+    [data, ratings]
   );
 
   const courtsInPlay = useMemo(() => {
@@ -319,6 +434,9 @@ export default function EventView({
           <span className="sm:hidden">Board</span>
           <span className="hidden sm:inline">Leaderboard</span>
         </TabButton>
+        <TabButton active={tab === "survey"} onClick={() => setTab("survey")}>
+          Survey
+        </TabButton>
         <TabButton active={tab === "photos"} onClick={() => setTab("photos")}>
           Photos
         </TabButton>
@@ -390,12 +508,24 @@ export default function EventView({
                     />
                   ))}
                 </div>
+                {/* How the round was rated, under the scores it is about.
+                    Only when somebody has rated it: an empty line on every
+                    round before anyone has opened the Survey tab would be
+                    five rows of nothing. */}
+                {survey && <RoundRating tally={survey.rounds.find((r) => r.round === rnd.number)} />}
                 {/* Shown whatever the court filter is: filtering to one court
                     must not hide who is not on a court at all. */}
                 <Byes schedule={s} byes={rnd.byes} meIndex={meIndex} />
               </section>
             );
           })}
+          {survey && (
+            <SurveySummary
+              survey={survey}
+              players={s.players.length}
+              onOpenSurvey={() => setTab("survey")}
+            />
+          )}
         </>
       )}
 
@@ -404,6 +534,20 @@ export default function EventView({
           board={board}
           onDownload={downloadExcel}
           hasByes={s.layout.byesPerRound > 0}
+        />
+      )}
+
+      {tab === "survey" && (
+        <SurveyView
+          schedule={s}
+          names={names}
+          ratings={ratings}
+          survey={survey}
+          saveState={ratingState}
+          meIndex={meIndex}
+          meName={meName}
+          onChooseMe={chooseMe}
+          onRate={saveRating}
         />
       )}
 
@@ -490,6 +634,18 @@ function ScheduleView({
     });
   }, [s.rounds, meIndex, names]);
 
+  /**
+   * How much walking the day asks of this player.
+   *
+   * Read off the same function the organiser's movement table uses, so the
+   * number a player sees on their own strip is the number the organiser sees
+   * in the row beside their name.
+   */
+  const myMoves = useMemo(
+    () => (meIndex < 0 ? null : playerTravel(s)[meIndex] ?? null),
+    [s, meIndex]
+  );
+
   // A name may be remembered from a previous mixer that this one does not
   // include, which is worth saying rather than silently ignoring.
   const notPlaying = meName !== "" && meIndex < 0;
@@ -525,7 +681,19 @@ function ScheduleView({
 
       {myDay.length > 0 && (
         <div className="mb-5 rounded-xl border border-emerald-700/30 bg-emerald-50/50 p-3 dark:bg-emerald-950/20">
-          <h2 className="text-sm font-semibold">{meName}&apos;s day</h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <h2 className="text-sm font-semibold">{meName}&apos;s day</h2>
+            {/* The bare number. A player wants to know whether the draw marches
+                them across the club; any gloss on the end of it is the
+                organiser's business, and the breakdown lives in the movement
+                table behind the admin gate. */}
+            {myMoves && (
+              <p className="text-xs">
+                <span className="opacity-60"># Venue Changes:</span>{" "}
+                <span className="font-semibold">{myMoves.venueChanges}</span>
+              </p>
+            )}
+          </div>
           <div className="mt-2 flex flex-wrap gap-2">
             {myDay.map((d) => (
               <span
@@ -734,7 +902,51 @@ function LeaderboardView({
   hasByes: boolean;
 }) {
   const [which, setWhich] = useState<"all" | "men" | "women">("all");
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "rank",
+    dir: "asc",
+  });
   const rows = board[which];
+
+  /**
+   * Sorting changes the order of the rows and nothing else.
+   *
+   * The rank column keeps showing each player's real rank, which is on total
+   * games and computed by `rankTable`. Sorting by name and finding yourself
+   * numbered 7th is the point: it answers "where did I come" without making
+   * the reader scan twenty rows for their own surname. Renumbering 1..n on
+   * whatever column was clicked would invent a second, wrong, standing.
+   */
+  const sorted = useMemo(() => {
+    const out = [...rows];
+    if (sort.key === "rank") {
+      // Already in ranked order from `rankTable`, ties and all.
+      return sort.dir === "asc" ? out : out.reverse();
+    }
+    out.sort((a, b) => {
+      const cmp =
+        sort.key === "name"
+          ? a.name.localeCompare(b.name)
+          : a[sort.key] - b[sort.key] || a.name.localeCompare(b.name);
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+    return out;
+  }, [rows, sort]);
+
+  /**
+   * Click a column to sort by it; click it again to reverse.
+   *
+   * A first click sorts the way the column is usually read: names up from A,
+   * numbers down from the best, rank from first place. Guessing that once is
+   * worth more than making everyone click twice.
+   */
+  function sortBy(key: SortKey) {
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: key === "name" || key === "rank" ? "asc" : "desc" }
+    );
+  }
   return (
     <section>
       <div className="mb-3 flex gap-2">
@@ -763,15 +975,25 @@ function LeaderboardView({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-black/10 text-left text-xs uppercase tracking-wide opacity-60 dark:border-white/15">
-                <th className="py-2 pr-2">#</th>
-                <th className="py-2 pr-2">Player</th>
-                <th className="py-2 pr-2 text-right">Games</th>
-                <th className="py-2 pr-2 text-right">Played</th>
-                <th className="py-2 text-right">Avg</th>
+                <SortHeader col="rank" sort={sort} onSort={sortBy}>
+                  #
+                </SortHeader>
+                <SortHeader col="name" sort={sort} onSort={sortBy}>
+                  Player
+                </SortHeader>
+                <SortHeader col="games" sort={sort} onSort={sortBy} right>
+                  Games
+                </SortHeader>
+                <SortHeader col="played" sort={sort} onSort={sortBy} right>
+                  Played
+                </SortHeader>
+                <SortHeader col="avg" sort={sort} onSort={sortBy} right last>
+                  Avg
+                </SortHeader>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {sorted.map((r) => (
                 <LeaderRow key={`${r.index}-${r.name}`} r={r} />
               ))}
             </tbody>
@@ -779,6 +1001,10 @@ function LeaderboardView({
         </div>
       )}
 
+      <p className="mt-3 text-xs opacity-60">
+        Tap a column to sort by it, and again to reverse. The # column always
+        shows the real placing, whatever the table is sorted by.
+      </p>
       {hasByes && (
         <p className="mt-3 text-xs opacity-60">
           Ranking is on total games won. Players who sat out a round had one fewer match to
@@ -819,5 +1045,629 @@ function LeaderRow({ r }: { r: PlayerScore }) {
         {r.played ? r.avg.toFixed(1) : "–"}
       </td>
     </tr>
+  );
+}
+
+/** Which column the leaderboard is sorted by. */
+type SortKey = "rank" | "name" | "games" | "played" | "avg";
+
+/**
+ * A leaderboard column header that sorts.
+ *
+ * A real `<button>` inside the `<th>` rather than a click handler on the cell,
+ * so the column is reachable by keyboard and announces itself; `aria-sort`
+ * tells a screen reader which way the table is currently ordered.
+ */
+function SortHeader({
+  col,
+  sort,
+  onSort,
+  right,
+  last,
+  children,
+}: {
+  col: SortKey;
+  sort: { key: SortKey; dir: "asc" | "desc" };
+  onSort: (key: SortKey) => void;
+  right?: boolean;
+  last?: boolean;
+  children: React.ReactNode;
+}) {
+  const active = sort.key === col;
+  return (
+    <th
+      className={`py-2 ${last ? "" : "pr-2"} ${right ? "text-right" : "text-left"}`}
+      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        className={`inline-flex items-center gap-1 uppercase tracking-wide ${
+          active ? "font-semibold opacity-100" : "hover:opacity-100"
+        }`}
+      >
+        {children}
+        {/* A fixed-width marker, so switching column does not shuffle the
+            header widths and jog the whole table sideways. */}
+        <span aria-hidden className={`w-2 text-[0.6rem] ${active ? "" : "opacity-0"}`}>
+          {sort.dir === "asc" ? "▲" : "▼"}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+// ---- the survey ------------------------------------------------------------
+/**
+ * Five tappable stars.
+ *
+ * Tapping the star a rating already sits on clears it, which is the only way
+ * back from a mis-tap on a phone; there is no separate clear button to find.
+ * The targets are deliberately large: this is filled in courtside, standing
+ * up, often in sunshine.
+ */
+function StarPicker({
+  value,
+  onChange,
+  label,
+  state,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  label: string;
+  state?: SaveState;
+}) {
+  return (
+    <div className="flex items-center gap-1" role="group" aria-label={label}>
+      {Array.from({ length: MAX_STARS }, (_, i) => i + 1).map((n) => {
+        const on = value !== null && n <= value;
+        return (
+          <button
+            key={n}
+            type="button"
+            aria-label={`${n} star${n === 1 ? "" : "s"}`}
+            aria-pressed={on}
+            onClick={() => onChange(value === n ? null : n)}
+            className={`px-0.5 text-2xl leading-none transition-transform active:scale-90 ${
+              on ? "text-amber-500" : "opacity-25 hover:opacity-50"
+            }`}
+          >
+            {on ? "★" : "☆"}
+          </button>
+        );
+      })}
+      {state === "saving" && <span className="ml-1 text-xs opacity-50">saving…</span>}
+      {state === "error" && (
+        <span className="ml-1 text-xs text-red-600 dark:text-red-400">not saved</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The Rate pane: your own matches, then the day.
+ *
+ * It asks who you are first, for the same reason the Schedule tab does, and
+ * remembers it in the same place. Without a name there is nothing sensible to
+ * show: the question is not "rate the tennis" in the abstract, it is "rate the
+ * four matches you played", and which four depends entirely on who is asking.
+ */
+function SurveyRate({
+  schedule,
+  names,
+  ratings,
+  survey,
+  saveState,
+  meIndex,
+  meName,
+  onChooseMe,
+  onRate,
+}: {
+  schedule: Schedule;
+  names: string[];
+  ratings: Ratings;
+  /** Everyone's ratings, folded. Null only before the event has loaded. */
+  survey: ReturnType<typeof summarizeSurvey> | null;
+  saveState: Record<string, SaveState>;
+  meIndex: number;
+  meName: string;
+  onChooseMe: (name: string) => void;
+  onRate: (player: number, stars: number | null, at?: { round: number; court: number }) => void;
+}) {
+  if (meIndex < 0) {
+    return (
+      <section>
+        <h2 className="text-sm font-semibold">Rate your matches</h2>
+        <p className="mt-2 text-sm opacity-70">
+          Pick your name and you will get your own card for each round, plus one
+          question about the day as a whole. Nobody sees who gave which rating.
+        </p>
+        <select
+          aria-label="Who are you?"
+          value={meName}
+          onChange={(e) => onChooseMe(e.target.value)}
+          className="mt-4 w-full rounded-lg border border-black/15 bg-transparent px-3 py-2.5 text-base dark:border-white/20"
+        >
+          <option value="">Who are you?</option>
+          {[...schedule.players]
+            .map((p, i) => ({ name: p.name, i }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map(({ name, i }) => (
+              <option key={i} value={name}>
+                {name}
+              </option>
+            ))}
+        </select>
+        {meName && (
+          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            {meName} is not on today&apos;s roster, so there are no matches to rate.
+          </p>
+        )}
+      </section>
+    );
+  }
+
+  const mine = matchesFor(schedule, meIndex);
+  const { rated, total } = progressFor(schedule, ratings, meIndex);
+  const overall = ratings[overallKey(meIndex)] ?? null;
+
+  return (
+    <section>
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold">
+          Rating as <span className="font-bold">{meName}</span>
+        </h2>
+        <button
+          type="button"
+          onClick={() => onChooseMe("")}
+          className="text-xs underline underline-offset-2 opacity-60 hover:opacity-100"
+        >
+          not me
+        </button>
+      </div>
+
+      <p className="mb-4 text-xs opacity-60">
+        {rated} of {total} match{total === 1 ? "" : "es"} rated. Tap a star to rate,
+        tap it again to undo. Ratings are anonymous and save as you go, and once
+        you have rated a round you will see how everyone else found it, updating
+        as they answer.
+      </p>
+
+      <div className="space-y-3">
+        {mine.map(({ round, court }) => {
+          const key = ratingKey(round, court, meIndex);
+          const match = schedule.rounds
+            .find((r) => r.number === round)
+            ?.matches.find((m) => m.court === court);
+          // Which side of the net this player was on decides who their partner
+          // was. Taking the other three in team order would name an opponent
+          // as the partner for everybody drawn on team B.
+          const onA = match ? match.teamA.includes(meIndex) : false;
+          const partner = match
+            ? (onA ? match.teamA : match.teamB).find((i) => i !== meIndex)
+            : undefined;
+          const against = match ? (onA ? match.teamB : match.teamA) : [];
+          return (
+            <div
+              key={key}
+              className="rounded-xl border border-black/10 p-3 dark:border-white/15"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-semibold">Round {round}</span>
+                <span className="text-xs opacity-60">{courtName(court, names)}</span>
+              </div>
+              {/* Who was on court, so a player picking a round out of five has
+                  something to remember it by other than its number. */}
+              {partner !== undefined && (
+                <p className="mt-0.5 truncate text-xs opacity-50">
+                  with {schedule.players[partner]?.name} v{" "}
+                  {against.map((i) => schedule.players[i]?.name).join(" & ")}
+                </p>
+              )}
+              <div className="mt-2">
+                <StarPicker
+                  label={`Round ${round} on ${courtName(court, names)}`}
+                  value={ratings[key] ?? null}
+                  state={saveState[key]}
+                  onChange={(v) => onRate(meIndex, v, { round, court })}
+                />
+              </div>
+              {/* How the round is going, but only once this player has had
+                  their say. Showing the average first would anchor the answer
+                  to it, and the number would stop measuring what people
+                  thought and start measuring what they saw. */}
+              <RoundSoFar
+                round={round}
+                tally={survey?.rounds.find((r) => r.round === round)}
+                revealed={ratings[key] !== undefined}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The tournament as a whole, which is a different question from the
+          mean of the matches: a day can be more or less than its tennis. */}
+      <div className="mt-6 rounded-xl border border-emerald-600/30 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
+        <h3 className="text-sm font-semibold">The tournament overall</h3>
+        <p className="mt-0.5 text-xs opacity-60">
+          Everything together: the draw, the organisation, the morning.
+        </p>
+        <div className="mt-2">
+          <StarPicker
+            label="The tournament overall"
+            value={overall}
+            state={saveState[overallKey(meIndex)]}
+            onChange={(v) => onRate(meIndex, v)}
+          />
+        </div>
+        <RoundSoFar
+          round={0}
+          tally={survey?.overall}
+          revealed={overall !== null}
+          label="Everyone so far"
+        />
+      </div>
+    </section>
+  );
+}
+
+/** One round's mean rating, shown under that round's scores. */
+function RoundRating({ tally }: { tally?: Tally }) {
+  if (!tally || tally.count === 0) return null;
+  return (
+    <p className="mt-2 text-xs opacity-60">
+      <span className="text-amber-500">{starBar(tally.avg)}</span>{" "}
+      {fmtStars(tally.avg)} from {tally.count} rating{tally.count === 1 ? "" : "s"}
+    </p>
+  );
+}
+
+/**
+ * The survey at the foot of the Results tab: the two headline numbers.
+ *
+ * Kept to the two means and their counts. The per-round detail is already up
+ * the page against the round it describes, and a second copy of it here would
+ * be a table nobody reads.
+ */
+function SurveySummary({
+  survey,
+  players,
+  onOpenSurvey,
+}: {
+  survey: ReturnType<typeof summarizeSurvey>;
+  players: number;
+  onOpenSurvey: () => void;
+}) {
+  const nothing = survey.matches.count === 0 && survey.overall.count === 0;
+  return (
+    <section className="mt-6 rounded-xl border border-black/10 p-4 dark:border-white/15">
+      <h2 className="text-sm font-semibold">Survey</h2>
+      {nothing ? (
+        <p className="mt-1 text-sm opacity-70">
+          Nobody has rated anything yet.{" "}
+          <button
+            type="button"
+            onClick={onOpenSurvey}
+            className="underline underline-offset-2"
+          >
+            Rate your matches
+          </button>
+          .
+        </p>
+      ) : (
+        <>
+          <dl className="mt-2 grid grid-cols-2 gap-4">
+            <div>
+              <dt className="text-xs uppercase tracking-wide opacity-60">The tennis</dt>
+              <dd className="mt-0.5">
+                <span className="text-amber-500">{starBar(survey.matches.avg)}</span>{" "}
+                <span className="font-semibold tabular-nums">
+                  {fmtStars(survey.matches.avg)}
+                </span>
+                <span className="ml-1 text-xs opacity-60">
+                  · {survey.matches.count} rating{survey.matches.count === 1 ? "" : "s"}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide opacity-60">The tournament</dt>
+              <dd className="mt-0.5">
+                {survey.overall.count === 0 ? (
+                  <span className="text-sm opacity-50">not rated yet</span>
+                ) : (
+                  <>
+                    <span className="text-amber-500">{starBar(survey.overall.avg)}</span>{" "}
+                    <span className="font-semibold tabular-nums">
+                      {fmtStars(survey.overall.avg)}
+                    </span>
+                    <span className="ml-1 text-xs opacity-60">
+                      · {survey.overall.count}
+                    </span>
+                  </>
+                )}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-xs opacity-60">
+            {survey.responders} of {players} players have had their say.{" "}
+            <button
+              type="button"
+              onClick={onOpenSurvey}
+              className="underline underline-offset-2"
+            >
+              Add yours
+            </button>
+            .
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
+ * How everyone else found this round, shown once you have rated it yourself.
+ *
+ * The reveal is deliberately gated on the reader's own answer. An average
+ * sitting above an empty row of stars is an anchor: people converge on the
+ * number in front of them, and a survey that does that is measuring its own
+ * display rather than the tennis. Rate first, then compare.
+ *
+ * `count` of 1 says the reader is the only person in yet, so it reports that
+ * rather than presenting their own rating back to them as a consensus.
+ */
+function RoundSoFar({
+  round,
+  tally,
+  revealed,
+  label,
+}: {
+  round: number;
+  tally?: Tally;
+  revealed: boolean;
+  label?: string;
+}) {
+  if (!revealed) {
+    return (
+      <p className="mt-2 text-xs opacity-40">
+        Rate it to see how {label ? "everyone else" : "the round"} went.
+      </p>
+    );
+  }
+  if (!tally || tally.count === 0) return null;
+  if (tally.count === 1) {
+    return <p className="mt-2 text-xs opacity-50">You are the first to rate this.</p>;
+  }
+  return (
+    <p className="mt-2 text-xs opacity-70">
+      {label ?? `Round ${round} so far`}:{" "}
+      <span className="text-amber-500">{starBar(tally.avg)}</span>{" "}
+      <span className="font-semibold tabular-nums">{fmtStars(tally.avg)}</span>
+      <span className="opacity-70"> from {tally.count} ratings</span>
+    </p>
+  );
+}
+
+/**
+ * The Survey tab: two panes, rating and reading.
+ *
+ * Rate is one player's own four cards. Everyone is the whole club's answer,
+ * round by round and court by court. They are the same data from opposite
+ * ends, which is why they are sub-tabs of one tab rather than two tabs in the
+ * top bar: the top bar answers "what do you want to do", and both of these are
+ * the survey.
+ *
+ * Not folded into the Leaderboard, either, though it was the other candidate.
+ * The leaderboard ranks people on games won; this rates matches on how good
+ * they were to play. Putting a star average in a column beside a games total
+ * invites reading one as a component of the other, and they measure nothing in
+ * common: the best player can have the dullest afternoon.
+ */
+function SurveyView(props: {
+  schedule: Schedule;
+  names: string[];
+  ratings: Ratings;
+  survey: ReturnType<typeof summarizeSurvey> | null;
+  saveState: Record<string, SaveState>;
+  meIndex: number;
+  meName: string;
+  onChooseMe: (name: string) => void;
+  onRate: (player: number, stars: number | null, at?: { round: number; court: number }) => void;
+}) {
+  const [pane, setPane] = useState<"rate" | "all">("rate");
+  const { survey, schedule, names } = props;
+  const answers = survey ? survey.matches.count + survey.overall.count : 0;
+
+  return (
+    <section>
+      <div className="mb-4 flex gap-2">
+        {(["rate", "all"] as const).map((k) => (
+          <button
+            key={k}
+            onClick={() => setPane(k)}
+            className={`rounded-lg px-3 py-1.5 text-sm ${
+              pane === k
+                ? "bg-black/10 font-semibold dark:bg-white/15"
+                : "opacity-60 hover:opacity-100"
+            }`}
+          >
+            {k === "rate" ? "Rate" : "Everyone"}
+            {/* The count is the reason to look, so it goes on the tab. */}
+            {k === "all" && answers > 0 && (
+              <span className="ml-1.5 text-xs opacity-60">{answers}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {pane === "rate" ? (
+        <SurveyRate {...props} />
+      ) : (
+        <SurveyResults survey={survey} schedule={schedule} names={names} />
+      )}
+    </section>
+  );
+}
+
+/**
+ * The whole club's answer: two headline numbers, then every round and court.
+ *
+ * Court rows are held back until three people on that court have rated it.
+ * Four players share a court, so with two ratings in and one of them your own
+ * the average gives up the other person's answer exactly - in a club of
+ * eighteen who all know each other, that is not anonymous. Three is the point
+ * where an individual score stops being recoverable from the mean.
+ */
+function SurveyResults({
+  survey,
+  schedule,
+  names,
+}: {
+  survey: ReturnType<typeof summarizeSurvey> | null;
+  schedule: Schedule;
+  names: string[];
+}) {
+  if (!survey || (survey.matches.count === 0 && survey.overall.count === 0)) {
+    return (
+      <p className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        Nobody has rated anything yet. Ratings appear here as they come in.
+      </p>
+    );
+  }
+
+  const rated = survey.rounds.filter((r) => r.count > 0);
+  const best = rated.length
+    ? rated.reduce((a, b) => (b.avg > a.avg ? b : a))
+    : null;
+  const worst = rated.length
+    ? rated.reduce((a, b) => (b.avg < a.avg ? b : a))
+    : null;
+
+  return (
+    <div>
+      <dl className="grid grid-cols-2 gap-3">
+        <Headline
+          label="The tournament"
+          tally={survey.overall}
+          hint="the end-of-day question"
+        />
+        <Headline
+          label="The tennis"
+          tally={survey.matches}
+          hint="every match rating pooled"
+        />
+      </dl>
+
+      <p className="mt-3 text-xs opacity-60">
+        {survey.responders} of {schedule.players.length} players have rated
+        something. Updates as answers come in.
+      </p>
+
+      <h3 className="mt-6 mb-2 text-sm font-semibold">Round by round</h3>
+      <div className="space-y-2">
+        {survey.rounds.map((r) => (
+          <div
+            key={r.round}
+            className="rounded-xl border border-black/10 p-3 dark:border-white/15"
+          >
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm font-semibold">
+                Round {r.round}
+                {/* Only worth calling out once there is a spread to call out. */}
+                {rated.length > 1 && best && worst && best.avg !== worst.avg && (
+                  <>
+                    {r.round === best.round && (
+                      <span className="ml-2 text-xs font-normal text-emerald-700 dark:text-emerald-400">
+                        best round
+                      </span>
+                    )}
+                    {r.round === worst.round && (
+                      <span className="ml-2 text-xs font-normal opacity-50">
+                        lowest rated
+                      </span>
+                    )}
+                  </>
+                )}
+              </span>
+              {r.count === 0 ? (
+                <span className="text-xs opacity-40">not rated yet</span>
+              ) : (
+                <span className="text-sm">
+                  <span className="text-amber-500">{starBar(r.avg)}</span>{" "}
+                  <span className="font-semibold tabular-nums">{fmtStars(r.avg)}</span>
+                  <span className="ml-1 text-xs opacity-50">· {r.count}</span>
+                </span>
+              )}
+            </div>
+
+            {r.count > 0 && (
+              <ul className="mt-2 space-y-1">
+                {r.matches.map((m) => (
+                  <li
+                    key={m.court}
+                    className="flex items-baseline justify-between gap-2 text-xs"
+                  >
+                    <span className="truncate opacity-60">{courtName(m.court, names)}</span>
+                    {m.count >= 3 ? (
+                      <span className="shrink-0">
+                        <span className="text-amber-500">{starBar(m.avg)}</span>{" "}
+                        <span className="tabular-nums">{fmtStars(m.avg)}</span>
+                        <span className="ml-1 opacity-40">· {m.count}</span>
+                      </span>
+                    ) : (
+                      <span
+                        className="shrink-0 opacity-30"
+                        title="Shown once three people on this court have rated it, so no single answer can be worked out from the average."
+                      >
+                        {m.count === 0 ? "–" : "too few yet"}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-4 text-xs opacity-50">
+        A court shows its own average once three of its four players have rated
+        it. Below that the average would give away an individual answer.
+      </p>
+    </div>
+  );
+}
+
+/** One of the two big numbers at the top of the Everyone pane. */
+function Headline({
+  label,
+  tally,
+  hint,
+}: {
+  label: string;
+  tally: Tally;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-xl border border-black/10 p-3 dark:border-white/15">
+      <dt className="text-xs uppercase tracking-wide opacity-60">{label}</dt>
+      <dd className="mt-1">
+        {tally.count === 0 ? (
+          <span className="text-sm opacity-40">not rated yet</span>
+        ) : (
+          <>
+            <div className="text-amber-500">{starBar(tally.avg)}</div>
+            <div className="mt-0.5">
+              <span className="text-xl font-bold tabular-nums">{fmtStars(tally.avg)}</span>
+              <span className="ml-1.5 text-xs opacity-50">
+                from {tally.count}
+              </span>
+            </div>
+          </>
+        )}
+        <div className="mt-1 text-xs opacity-40">{hint}</div>
+      </dd>
+    </div>
   );
 }

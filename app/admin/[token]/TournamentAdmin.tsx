@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * The organiser's controls for one tournament: take the whole record away, and
- * moderate what members have posted to it.
+ * The organiser's controls for one tournament: rename it, see how far the
+ * draw makes people walk, take the whole record away, and moderate what
+ * members have posted to it.
  *
  * These sit together because they answer the same question, "what is on this
  * mixer and what do I want to do about it". Both work on whichever event is on
@@ -13,6 +14,12 @@ import { useEffect, useState } from "react";
 import { buildTournamentBundle, type BundleEvent, type BundleProgress } from "@/lib/bundle";
 import { fmtWhen, type ChatMessage } from "@/lib/chat";
 import { isValidEventId, normalizeEventId } from "@/lib/eventid";
+import {
+  courtName,
+  playerTravel,
+  travelSummary,
+  type Schedule,
+} from "@/lib/scheduler";
 import { MAX_PHOTOS_PER_EVENT, fmtBytes, type PhotoMeta } from "@/lib/photos";
 
 interface Loaded {
@@ -31,6 +38,17 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
   const [progress, setProgress] = useState<BundleProgress | null>(null);
   /** Bumped to re-read everything after something is deleted. */
   const [version, setVersion] = useState(0);
+  /** The name box, seeded from whatever the event is currently called. */
+  const [title, setTitle] = useState("");
+  /**
+   * Which tournament the "Saved" line belongs to, or null for none showing.
+   *
+   * The code rather than a boolean, so the confirmation survives the reload
+   * that renaming triggers but disappears the moment the organiser types a
+   * different event code. A flag cleared on reload was wiped before it could
+   * be read; one never cleared would follow you to the next tournament.
+   */
+  const [renamedCode, setRenamedCode] = useState<string | null>(null);
 
   const clean = normalizeEventId(code);
   const valid = isValidEventId(clean);
@@ -54,6 +72,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
       ]);
       if (cancelled) return;
       const event = ev && ev.id && ev.schedule ? (ev as BundleEvent) : null;
+      setTitle(event?.title ?? "");
       setLoaded({
         code: clean,
         event,
@@ -67,7 +86,36 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
     };
   }, [clean, valid, version]);
 
+
   const data = loaded && loaded.code === clean ? loaded : null;
+
+  /**
+   * Give the tournament its proper name, without touching anything else.
+   *
+   * The event is reloaded afterwards rather than patched in place, so the
+   * label beside the download button and the disabled state of this button
+   * both come from what the server actually stored.
+   */
+  async function rename() {
+    if (!data?.event || busy) return;
+    setBusy("rename");
+    setError("");
+    try {
+      const res = await fetch("/api/admin/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: data.code, title: title.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not rename that event.");
+      setRenamedCode(data.code);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  }
 
   async function download() {
     if (!data?.event || busy) return;
@@ -150,6 +198,42 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
           )}
         </div>
 
+        {data?.event && (
+          <div className="mt-4 rounded-lg border border-black/10 p-3 dark:border-white/15">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="opacity-70">Tournament name</span>
+              <input
+                value={title}
+                onChange={(e) => {
+                  setTitle(e.target.value);
+                  setRenamedCode(null);
+                }}
+                maxLength={120}
+                placeholder="Tennis mixer"
+                className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <button
+                onClick={rename}
+                disabled={busy !== "" || title.trim() === (data.event.title ?? "").trim()}
+                className="rounded-lg bg-black/80 px-3 py-1.5 text-sm font-medium text-white hover:bg-black disabled:opacity-40 dark:bg-white/85 dark:text-black dark:hover:bg-white"
+              >
+                {busy === "rename" ? "Saving…" : "Rename"}
+              </button>
+              {renamedCode === data.code && (
+                <span className="text-xs text-emerald-700 dark:text-emerald-400">
+                  Saved. Members see it on their next refresh.
+                </span>
+              )}
+            </div>
+            <p className="mt-2 text-xs opacity-50">
+              Changes the name only. The draw, the scores, the code and everything
+              members have posted stay exactly as they are.
+            </p>
+          </div>
+        )}
+
         {progress && (
           <div className="mt-3">
             <div className="h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/15">
@@ -167,6 +251,8 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
           chat as plain text, every photo as an ordinary JPEG, and a raw JSON copy. It opens
           without this app, which is the point of keeping it.
         </p>
+
+        {data?.event && <MovementTable schedule={data.event.schedule} />}
 
         {error && (
           <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200">
@@ -289,5 +375,109 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Who the draw makes walk, and how far.
+ *
+ * The scheduler already works to keep people where they are - that is what the
+ * travel costs in `lib/scheduler` are for - but until now nothing showed the
+ * organiser the result, so a draw that happened to march one player across the
+ * club five times looked exactly like one that did not. This is that check,
+ * per player, before anyone is standing on a court.
+ *
+ * Sorted worst first, because the reason to open it is to find the person who
+ * got a bad deal, not to read eighteen rows in roster order.
+ */
+function MovementTable({ schedule }: { schedule: Schedule }) {
+  const [open, setOpen] = useState(false);
+  const names = schedule.courtNames ?? [];
+  const rows = [...playerTravel(schedule)].sort(
+    (a, b) =>
+      b.venueChanges - a.venueChanges || b.walks - a.walks || a.name.localeCompare(b.name)
+  );
+  const totals = travelSummary(schedule);
+
+  return (
+    <div className="mt-4 rounded-lg border border-black/10 p-3 dark:border-white/15">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-baseline justify-between gap-3 text-left"
+      >
+        <span className="text-sm font-semibold">Player movement</span>
+        <span className="text-xs opacity-60">
+          {totals.drives} venue change{totals.drives === 1 ? "" : "s"} ·{" "}
+          {totals.neverDrive} of {schedule.players.length} never change venue ·{" "}
+          {totals.walks} court swap{totals.walks === 1 ? "" : "s"}{" "}
+          <span className="opacity-70">{open ? "▲" : "▼"}</span>
+        </span>
+      </button>
+
+      {open && (
+        <>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-black/10 text-left text-xs uppercase tracking-wide opacity-60 dark:border-white/15">
+                  <th className="py-2 pr-2">Player</th>
+                  {schedule.rounds.map((r) => (
+                    <th key={r.number} className="py-2 pr-2">
+                      R{r.number}
+                    </th>
+                  ))}
+                  <th className="py-2 pr-2 text-right whitespace-nowrap"># Venue Changes</th>
+                  <th className="py-2 text-right">Swaps</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((t) => (
+                  <tr
+                    key={t.index}
+                    className="border-b border-black/5 dark:border-white/10"
+                  >
+                    <td className="py-2 pr-2 whitespace-nowrap">{t.name}</td>
+                    {t.byRound.map((court, i) => (
+                      <td
+                        key={i}
+                        className={`py-2 pr-2 text-xs whitespace-nowrap ${
+                          court === null ? "opacity-30" : "opacity-80"
+                        }`}
+                      >
+                        {court === null ? "bye" : courtName(court, names)}
+                      </td>
+                    ))}
+                    {/* The column to re-draw for. */}
+                    <td
+                      className={`py-2 pr-2 text-right tabular-nums ${
+                        t.venueChanges >= 2
+                          ? "font-semibold text-amber-700 dark:text-amber-400"
+                          : t.venueChanges === 0
+                            ? "opacity-30"
+                            : "font-semibold"
+                      }`}
+                    >
+                      {t.venueChanges}
+                    </td>
+                    {/* Court swaps inside one venue. Shown for completeness,
+                        greyed, because they are not venue changes. */}
+                    <td className="py-2 text-right tabular-nums opacity-40">
+                      {t.walks || "–"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs opacity-50">
+            A venue change is Dolphin to Shorebird, say. Swapping between two
+            courts at the same venue is a few steps, so it is counted separately
+            under Swaps and is not a venue change. Sitting out between two
+            matches on the same court is bridged over, not counted either. Two
+            or more venue changes is highlighted.
+          </p>
+        </>
+      )}
+    </div>
   );
 }

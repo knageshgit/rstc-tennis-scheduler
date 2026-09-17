@@ -1047,49 +1047,118 @@ export interface TravelSummary {
   venues: string[];
 }
 
-export function travelSummary(s: Schedule): TravelSummary {
-  const names = s.courtNames ?? DEFAULT_COURT_NAMES;
-  const venues = Array.from({ length: s.layout.courtsUsed }, (_, i) =>
-    courtName(i + 1, names)
-  );
-  const venueKey = venues.map(venueOf);
+/** One player's journey round the club, and what it cost them. */
+export interface PlayerTravel {
+  /** Index into `schedule.players`. */
+  index: number;
+  name: string;
+  /**
+   * Court number for each round, or null for a round they sit out.
+   *
+   * Full length, byes included, so the organiser's table lines up round for
+   * round across every player. The counts below still bridge over byes: a
+   * player who sits out between two matches on the same court has not moved.
+   */
+  byRound: (number | null)[];
+  /** Rounds they are actually on a court. */
+  played: number;
+  /**
+   * The headline "# Venue Changes".
+   *
+   * Swapping from Dolphin 1 to Dolphin 2 is a few steps between two courts
+   * side by side, and the club does not count that as having been moved at
+   * all. Going from Dolphin to Shorebird is a walk across the site between two
+   * eight-game matches, and that is the thing worth counting and worth
+   * re-drawing to avoid. So this is `drives`, never `walks + drives`.
+   */
+  venueChanges: number;
+  /** Court swaps within one venue. Recorded, but not a venue change. */
+  walks: number;
+  /** The same number as `venueChanges`, under the scheduler's own name. */
+  drives: number;
+}
 
-  // The courts each player used, in round order, byes skipped.
-  const trail: number[][] = s.players.map(() => []);
-  for (const rnd of s.rounds) {
+/**
+ * Per-player movement, which is what both the player's own day strip and the
+ * organiser's movement table are asking for.
+ *
+ * Two things are deliberately not counted as a move. A bye is bridged over:
+ * sitting out round 3 between two matches on Shorebird 1 has not moved anyone
+ * anywhere. And a court swap inside one venue is not a move either, because
+ * the courts are side by side; only crossing to a different venue is. Both
+ * rules match how the scheduler already prices travel, where the gap between
+ * WALK_COST and DRIVE_COST is the whole point.
+ *
+ * `travelSummary` is these same numbers folded into totals, and is derived
+ * from this so the two can never disagree about what counts.
+ */
+export function playerTravel(s: Schedule): PlayerTravel[] {
+  const names = s.courtNames ?? DEFAULT_COURT_NAMES;
+  const venueKey = Array.from({ length: s.layout.courtsUsed }, (_, i) =>
+    venueOf(courtName(i + 1, names))
+  );
+
+  const byRound: (number | null)[][] = s.players.map(() =>
+    s.rounds.map(() => null)
+  );
+  for (const [r, rnd] of s.rounds.entries()) {
     for (const m of rnd.matches) {
       for (const p of [m.teamA[0], m.teamA[1], m.teamB[0], m.teamB[1]]) {
-        trail[p].push(m.court - 1);
+        if (byRound[p]) byRound[p][r] = m.court;
       }
     }
   }
 
+  return s.players.map((player, index) => {
+    const mine = byRound[index];
+    const courts = mine.filter((c): c is number => c !== null).map((c) => c - 1);
+    let walks = 0;
+    let drives = 0;
+    for (let i = 1; i < courts.length; i++) {
+      const a = courts[i - 1];
+      const b = courts[i];
+      if (a === b) continue;
+      if (venueKey[a] === venueKey[b]) walks += 1;
+      else drives += 1;
+    }
+    return {
+      index,
+      name: player.name,
+      byRound: mine,
+      played: courts.length,
+      // A swap between two courts at one venue is in `walks`, never here.
+      venueChanges: drives,
+      walks,
+      drives,
+    };
+  });
+}
+
+export function travelSummary(s: Schedule): TravelSummary {
+  const names = s.courtNames ?? DEFAULT_COURT_NAMES;
+  const venueKey = Array.from({ length: s.layout.courtsUsed }, (_, i) =>
+    venueOf(courtName(i + 1, names))
+  );
+
+  const per = playerTravel(s);
   let transitions = 0;
   let stays = 0;
   let walks = 0;
   let drives = 0;
   let neverMove = 0;
   let neverDrive = 0;
-  for (const courts of trail) {
-    if (courts.length === 0) continue;
-    let moved = false;
-    let drove = false;
-    for (let i = 1; i < courts.length; i++) {
-      const a = courts[i - 1];
-      const b = courts[i];
-      transitions += 1;
-      if (a === b) stays += 1;
-      else if (venueKey[a] === venueKey[b]) {
-        walks += 1;
-        moved = true;
-      } else {
-        drives += 1;
-        moved = true;
-        drove = true;
-      }
-    }
-    if (!moved) neverMove += 1;
-    if (!drove) neverDrive += 1;
+  for (const t of per) {
+    if (t.played === 0) continue;
+    transitions += t.played - 1;
+    // `stays` is transitions that changed no court at all, so it nets off both
+    // kinds of change, not just the ones that count as a move.
+    stays += t.played - 1 - t.walks - t.drives;
+    walks += t.walks;
+    drives += t.drives;
+    // `neverMove` keeps its original meaning - never changed court at all -
+    // because the Excel export and the bundle already report it that way.
+    if (t.walks === 0 && t.drives === 0) neverMove += 1;
+    if (t.drives === 0) neverDrive += 1;
   }
 
   return {

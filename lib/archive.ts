@@ -23,6 +23,7 @@
  */
 import { FORMATS, type Format, type Schedule } from "./scheduler";
 import { leaderboards, type PlayerScore, type Scores } from "./scoring";
+import { summarizeSurvey, type Ratings } from "./survey";
 
 /** One place on a podium. */
 export interface Standing {
@@ -30,6 +31,27 @@ export interface Standing {
   rank: number;
   name: string;
   games: number;
+}
+
+/**
+ * What the club thought of the tennis, kept with the result.
+ *
+ * Round means and the two headline numbers, but not the per-match breakdown
+ * the live Results tab shows. The archive row is read by `HGETALL` over every
+ * tournament ever played, so it pays for its size on every view of the results
+ * page: twenty match tallies per mixer would be most of the row and would be
+ * read by people looking at a season, not a court. Anyone who wants that
+ * detail can open the tournament itself, where it is computed from the ratings.
+ */
+export interface ArchiveSurvey {
+  /** One mean per round, in schedule order. */
+  rounds: { round: number; count: number; avg: number }[];
+  /** Every per-match rating pooled: how good was the tennis. */
+  matches: { count: number; avg: number };
+  /** The separate end-of-day question: how good was the tournament. */
+  overall: { count: number; avg: number };
+  /** How many players rated anything at all. */
+  responders: number;
 }
 
 /** What the results table shows for one finished tournament. */
@@ -67,6 +89,15 @@ export interface ArchiveEntry {
    * the page falls back to the overall champion until it is re-archived.
    */
   podium?: { men: Standing[]; women: Standing[] };
+  /**
+   * The survey, as it stood at archive time.
+   *
+   * Optional because every row filed before v11 has none, and the results page
+   * has to render those without a survey column rather than break. Absent and
+   * "nobody rated" are deliberately different: a row with `responders: 0` was
+   * archived by a version that asked and got no answers.
+   */
+  survey?: ArchiveSurvey;
   /** Were all the matches scored when this was archived? */
   complete: boolean;
   /** Matches scored / matches scheduled, at archive time. */
@@ -130,9 +161,11 @@ export function summarize(
   ev: { id: string; title: string; createdAt: number; schedule: Schedule; courtNames?: string[] },
   scores: Scores,
   date: string,
+  ratings: Ratings = {},
   now: number = Date.now()
 ): ArchiveEntry {
   const board = leaderboards(ev.schedule, scores);
+  const survey = summarizeSurvey(ev.schedule, ratings);
   const winners = board.all.filter((r) => r.rank === 1 && r.games > 0);
   const courts = new Set<number>();
   for (const rnd of ev.schedule.rounds) for (const m of rnd.matches) courts.add(m.court);
@@ -148,6 +181,13 @@ export function summarize(
     champions: winners.map((r) => r.name),
     championGames: winners[0]?.games ?? 0,
     podium: { men: podium(board.men), women: podium(board.women) },
+    // Flattened to round means here; the per-match detail stays in Redis.
+    survey: {
+      rounds: survey.rounds.map((r) => ({ round: r.round, count: r.count, avg: r.avg })),
+      matches: { count: survey.matches.count, avg: survey.matches.avg },
+      overall: { count: survey.overall.count, avg: survey.overall.avg },
+      responders: survey.responders,
+    },
     complete: board.complete,
     entered: board.entered,
     total: board.total,
