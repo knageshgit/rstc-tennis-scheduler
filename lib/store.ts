@@ -72,7 +72,7 @@ export interface StoredEvent {
   schedule: Schedule;
 }
 
-// The code helpers live in `lib/eventid` so the organiser's browser can use
+// The code helpers live in `lib/eventid` so the organizer's browser can use
 // them without importing this file. Re-exported because the routes and tests
 // already reach for them here.
 export { isValidEventId, newEventId, normalizeEventId } from "./eventid";
@@ -191,7 +191,7 @@ function db(): StoreClient {
  * Is this a schedule we can safely store and later render?
  *
  * The browser has already run the engine, and re-running it here could produce
- * a different schedule from the one the organiser is looking at, so the server
+ * a different schedule from the one the organizer is looking at, so the server
  * takes the client's word for the arrangement. What it will not take on trust
  * is the shape: every player index has to be in range, or the scoring page
  * would later read `players[undefined]` and break for everyone.
@@ -349,7 +349,7 @@ export async function setScore(
  *
  * The club wanted one link they could put in the group chat once and reuse
  * every week, so the root page does not ask for a code: it follows this
- * pointer, which the organiser moves when they publish. Old per-event links
+ * pointer, which the organizer moves when they publish. Old per-event links
  * keep working and keep showing their own day.
  *
  * One key, set and overwritten in place. On Blob this needed the same
@@ -545,7 +545,7 @@ export async function deletePhoto(id: string, photo: string): Promise<void> {
   await redis.hdel(photosKey(id), photo);
 }
 
-/** What this event's photos weigh, for the organiser's usage line. */
+/** What this event's photos weigh, for the organizer's usage line. */
 export async function photoUsage(id: string): Promise<{ count: number; bytes: number }> {
   const photos = await listPhotos(id);
   return {
@@ -586,7 +586,7 @@ export async function listMessages(id: string): Promise<ChatMessage[]> {
   }
 }
 
-/** Remove one message. Organisers only, enforced at the route. */
+/** Remove one message. Organizers only, enforced at the route. */
 export async function deleteMessage(id: string, message: string): Promise<void> {
   await db().hdel(chatKey(id), message);
 }

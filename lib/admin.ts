@@ -1,5 +1,5 @@
 /**
- * The organiser gate.
+ * The organizer gate.
  *
  * Up to v5 there was one page and everybody used it: the same screen that
  * generated a schedule also published it, so anyone who found the site could
@@ -26,7 +26,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 export const ADMIN_COOKIE = "rstc_admin";
 
-/** A month: long enough that an organiser sets up a mixer without retyping. */
+/** A month: long enough that an organizer sets up a mixer without retyping. */
 export const ADMIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 
 export interface AdminConfig {
@@ -78,7 +78,7 @@ export function checkToken(token: string): boolean {
   return safeEqual(token, path);
 }
 
-/** Is the PIN the organiser typed the right one? */
+/** Is the PIN the organizer typed the right one? */
 export function checkPin(pin: string): boolean {
   const { pin: want, pinSet } = adminConfig();
   if (!pinSet) return true;

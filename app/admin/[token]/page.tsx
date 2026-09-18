@@ -1,5 +1,5 @@
 /**
- * /admin/<secret> - the organiser's door.
+ * /admin/<secret> - the organizer's door.
  *
  * Two checks, in this order. The path segment has to match ADMIN_PATH or the
  * route 404s exactly as an unused URL would, so a wrong guess learns nothing
@@ -20,7 +20,7 @@ import PinGate from "./PinGate";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Organiser · Tennis Mixer",
+  title: "Organizer · Tennis Mixer",
   // Nothing here should ever turn up in a search result.
   robots: { index: false, follow: false },
 };

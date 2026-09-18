@@ -114,7 +114,7 @@ export function checkUpload(input: {
   if (!isAllowedType(input.type)) {
     return { ok: false, error: "That is not an image we can store." };
   }
-  // No limit on how many photos a mixer keeps: the organiser archives and
+  // No limit on how many photos a mixer keeps: the organizer archives and
   // clears them by hand. Each one is still size-checked below.
   if (!(input.fullBytes > 0) || input.fullBytes > MAX_FULL_BYTES) {
     return { ok: false, error: "That photo is too large to store." };
@@ -151,7 +151,7 @@ export function sortPhotos(photos: PhotoMeta[]): PhotoMeta[] {
   return [...photos].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
 }
 
-/** "2.3 MB" from a byte count, for the organiser's usage line. */
+/** "2.3 MB" from a byte count, for the organizer's usage line. */
 export function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;

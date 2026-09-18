@@ -15,7 +15,7 @@
  * anyone is expected to open.
  *
  * Built in the browser rather than on the server: the images already have to
- * travel to the organiser's machine, and routing them through a serverless
+ * travel to the organizer's machine, and routing them through a serverless
  * function first would double the transfer and risk its response limit.
  */
 import JSZip from "jszip";
@@ -98,7 +98,7 @@ export async function buildTournamentBundle(
       if (!res.ok) continue;
       zip.file(`${base}/photos/${photoName(photo, n)}`, await res.blob());
     } catch {
-      // One unreadable photo should not cost the organiser the other thirty-nine.
+      // One unreadable photo should not cost the organizer the other thirty-nine.
     }
   }
 

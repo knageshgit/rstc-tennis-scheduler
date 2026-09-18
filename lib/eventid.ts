@@ -2,7 +2,7 @@
  * Event codes: the six characters a member reads off a phone screen.
  *
  * Their own module, apart from the store that issues them, because the
- * organiser's browser needs to check a code somebody typed by hand, and
+ * organizer's browser needs to check a code somebody typed by hand, and
  * importing `lib/store` to do it would pull the Redis client into the page
  * bundle. Everything here is pure and safe to run anywhere.
  */

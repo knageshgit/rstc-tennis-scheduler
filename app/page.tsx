@@ -2,7 +2,7 @@
  * The club link: https://rstc-tennis-sch.vercel.app
  *
  * This is the one URL that goes in the group chat, so it must never need a
- * code, a login, or updating week to week. It follows the pointer the organiser
+ * code, a login, or updating week to week. It follows the pointer the organizer
  * moves when they publish, which means whoever opens it gets today's mixer.
  *
  * It only ever reads and scores. Building a schedule lives behind /admin.
@@ -28,7 +28,7 @@ export default async function ClubPage() {
       <h1 className="mt-3 text-xl font-bold">No mixer is up yet</h1>
       <p className="mt-2 text-sm opacity-70">
         {isStoreConfigured()
-          ? "When the organiser publishes this week's schedule it will appear right here, on this same link. Nothing to install, and no code to type."
+          ? "When the organizer publishes this week's schedule it will appear right here, on this same link. Nothing to install, and no code to type."
           : "Sharing is not configured on this deployment, so there is nothing to show."}
       </p>
       <p className="mt-6 text-xs opacity-50">

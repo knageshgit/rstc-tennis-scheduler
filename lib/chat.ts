@@ -8,7 +8,7 @@
  * during a morning of tennis: "we're short on court 3", "anyone got a spare
  * grip", "coffee after". So a message is short, the identity is the name a
  * member already picked to find their own court, and there is nothing to log
- * into. The organiser can delete anything, which is the same bargain the photos
+ * into. The organizer can delete anything, which is the same bargain the photos
  * make.
  */
 
@@ -129,7 +129,7 @@ export function checkMessage(input: {
   const text = cleanText(input.text);
   if (!text) return { ok: false, error: "Type something first." };
   if (input.existingCount >= MAX_MESSAGES_PER_EVENT) {
-    return { ok: false, error: "This mixer's chat is full. The organiser can clear it." };
+    return { ok: false, error: "This mixer's chat is full. The organizer can clear it." };
   }
   return { ok: true, text };
 }

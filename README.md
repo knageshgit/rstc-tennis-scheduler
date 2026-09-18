@@ -43,7 +43,7 @@ to the format, not a scheduling failure.
 | Who | URL | What they can do |
 |-----|-----|------------------|
 | **Club members** | `/` (the live app link above) | See the **Schedule**, enter and read **Results**, watch the **Leaderboard**, download the Excel. Share this link freely; it is the same every week. |
-| **Organisers** | `/admin/<secret>` | Everything above, plus building a schedule and publishing it. Keep this link to yourself. |
+| **Organizers** | `/admin/<secret>` | Everything above, plus building a schedule and publishing it. Keep this link to yourself. |
 
 The club link never changes. Publishing a schedule points it at that mixer, so the
 one URL in the group chat always opens whatever is on today. Each mixer also keeps a
@@ -63,7 +63,7 @@ npm run dev      # http://localhost:3000
 npm run build    # production build
 ```
 
-### How to use (organisers, at `/admin/<secret>`)
+### How to use (organizers, at `/admin/<secret>`)
 1. Prepare an `.xlsx` roster with a **name** column (or **First name** + **Last name**)
    and a level column (**Level**, **NTRP**, **USDA**, or **Tournament Rating**).
 2. Upload it, fill in any blank ratings in the editable grid.
@@ -103,7 +103,7 @@ someone sits lower than their play deserved.
      can filter to a single court, and that choice is remembered too.
    - **Leaderboard** - Open, Men and Women, live as scores come in.
 3. **Download results as Excel** from the Leaderboard tab at any point.
-4. When the day is over, **take it down** from the organiser page if you would rather
+4. When the day is over, **take it down** from the organizer page if you would rather
    the root page sat empty until next week.
 
 The scored workbook is the same file, not a second one: the schedule sheet gains
@@ -149,7 +149,7 @@ cur/1765555200000__-          taken down; the root page shows nothing
 Without `BLOB_READ_WRITE_TOKEN` everything else still works and publishing returns a
 plain "not configured" message rather than failing.
 
-### The organiser gate
+### The organizer gate
 
 Two locks, both environment variables, because a club wanted a link to keep rather
 than an account system:
@@ -188,10 +188,10 @@ each half-configured combination.
 | `app/page.tsx` | The club link: resolves the current event and hands it to the member view. |
 | `app/EventView.tsx` | What members see: the Schedule / Results / Leaderboard tabs. |
 | `app/e/[id]/` | One mixer by its permanent code, rendering the same three tabs. |
-| `app/admin/[token]/` | The organiser page: the gate, the PIN form, and the generator. |
+| `app/admin/[token]/` | The organizer page: the gate, the PIN form, and the generator. |
 | `app/api/events/` | Publish an event, read it, and record one match's score. |
 | `app/api/admin/` | Unlock and lock a device; move or take down the club link. |
-| `lib/admin.ts` | The organiser gate: secret path, PIN, and the unlock cookie (pure). |
+| `lib/admin.ts` | The organizer gate: secret path, PIN, and the unlock cookie (pure). |
 | `lib/scheduler.ts` | Scheduling/optimization engine (randomized restarts). |
 | `lib/scoring.ts` | Games tally and the Open/Men/Women rankings (pure, no I/O). |
 | `lib/store.ts` | Event storage on Vercel Blob, and the guard on what may be stored. |
@@ -201,7 +201,7 @@ each half-configured combination.
 | `scripts/verify_excel.mts` | Round-trips the exported workbook for each format, scored and unscored. |
 | `scripts/verify_scoring.mts` | Tally and ranking checks, including byes, ties and half-scored events. |
 | `scripts/verify_store.mts` | Event codes, the schedule shape guard, and the club-link pointer. |
-| `scripts/verify_admin.mts` | The organiser gate, right answers and wrong ones. |
+| `scripts/verify_admin.mts` | The organizer gate, right answers and wrong ones. |
 | `scripts/verify_travel.mts` | Asserts travel polish never costs schedule quality. |
 | `scripts/verify_roster.mts` | The pasted-list parser. |
 | `python/` | The original Python/Streamlit version (see below). Excluded from the Vercel build. |

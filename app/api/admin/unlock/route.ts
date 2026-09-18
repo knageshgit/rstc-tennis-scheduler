@@ -1,5 +1,5 @@
 /**
- * POST /api/admin/unlock - trade the organiser PIN for a cookie.
+ * POST /api/admin/unlock - trade the organizer PIN for a cookie.
  *
  * Both secrets are checked here: the secret path is sent along with the PIN so
  * that this endpoint is no easier to attack than the page it unlocks. Wrong

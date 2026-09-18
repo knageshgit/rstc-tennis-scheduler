@@ -121,7 +121,7 @@ const full = checkMessage({ text: "hi", existingCount: MAX_MESSAGES_PER_EVENT })
 check("one past the cap is refused", !full.ok);
 check(
   "and says what to do about it",
-  !full.ok && /organiser/i.test(full.error),
+  !full.ok && /organizer/i.test(full.error),
   !full.ok ? full.error : ""
 );
 

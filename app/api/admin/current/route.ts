@@ -3,7 +3,7 @@
  *
  * Publishing already points the link at the new event, so this is for the
  * corrections: putting last week's mixer back up after a mistaken publish, or
- * clearing the root page once an event is over. Organisers only.
+ * clearing the root page once an event is over. Organizers only.
  */
 import { isAdminRequest } from "@/lib/admin";
 import {
@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   if (!isAdminRequest(request)) {
-    return Response.json({ error: "Organisers only." }, { status: 401 });
+    return Response.json({ error: "Organizers only." }, { status: 401 });
   }
   if (!isStoreConfigured()) {
     return Response.json(

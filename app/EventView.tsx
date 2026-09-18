@@ -744,8 +744,8 @@ function ScheduleView({
   /**
    * How much walking the day asks of this player.
    *
-   * Read off the same function the organiser's movement table uses, so the
-   * number a player sees on their own strip is the number the organiser sees
+   * Read off the same function the organizer's movement table uses, so the
+   * number a player sees on their own strip is the number the organizer sees
    * in the row beside their name.
    */
   const myMoves = useMemo(
@@ -782,7 +782,7 @@ function ScheduleView({
       {notPlaying && (
         <p className="mb-4 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           {meName} is not on today&apos;s roster. Pick a name from the list, or ask the
-          organiser.
+          organizer.
         </p>
       )}
 
@@ -792,7 +792,7 @@ function ScheduleView({
             <h2 className="text-sm font-semibold">{meName}&apos;s day</h2>
             {/* The bare number. A player wants to know whether the draw marches
                 them across the club; any gloss on the end of it is the
-                organiser's business, and the breakdown lives in the movement
+                organizer's business, and the breakdown lives in the movement
                 table behind the admin gate. */}
             {myMoves && (
               <p className="text-xs">
@@ -1443,7 +1443,7 @@ function SurveyRate({
         <div className="rounded-xl border border-emerald-600/30 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
           <h3 className="text-sm font-semibold">The tournament overall</h3>
           <p className="mt-0.5 text-xs opacity-60">
-            Everything together: the draw, the organisation, the morning.
+            Everything together: the draw, the organization, the morning.
           </p>
           <div className="mt-2">
             <StarPicker

@@ -3,7 +3,7 @@
  *
  * This is the page the club points its members' area at. It is deliberately a
  * server component with no polling and no client JavaScript: the archive only
- * changes when an organiser files a tournament, so making members' phones ask
+ * changes when an organizer files a tournament, so making members' phones ask
  * about it every ten seconds would repeat the mistake that cost us the Blob
  * store. One `HGETALL` per view, rendered on the server.
  *
@@ -89,7 +89,7 @@ export default async function ResultsPage({
       {archive.length === 0 ? (
         <p className="rounded-xl border border-dashed border-black/15 p-8 text-center text-sm opacity-60 dark:border-white/20">
           {isStoreConfigured()
-            ? "No tournaments have been archived yet. They appear here once the organiser closes one out."
+            ? "No tournaments have been archived yet. They appear here once the organizer closes one out."
             : "Sharing is not configured on this deployment, so there is nothing to show."}
         </p>
       ) : (
@@ -232,7 +232,7 @@ const PLACE_STYLES = [
  * The top three of one draw, which is how the club has always read a result.
  *
  * A tournament can be archived with matches unscored - somebody forgets to
- * enter a court and the organiser closes it out anyway - so a placing is only
+ * enter a court and the organizer closes it out anyway - so a placing is only
  * shown once there is something to place on, and the row says how much is
  * missing under the mixer name.
  *

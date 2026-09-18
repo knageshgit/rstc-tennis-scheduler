@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The organiser's control over the results archive.
+ * The organizer's control over the results archive.
  *
  * Archiving is a separate act from publishing, and usually a separate day: the
  * schedule goes up on Friday evening, the mixer is scored on Saturday morning,
@@ -28,7 +28,7 @@ export default function ArchivePanel({
 }) {
   const [archive, setArchive] = useState<ArchiveEntry[]>(initial);
   const [code, setCode] = useState(liveId ?? "");
-  // Today in the organiser's own timezone, which is the club's. The server
+  // Today in the organizer's own timezone, which is the club's. The server
   // cannot work this out: it runs in UTC and would date a Saturday evening
   // mixer on the west coast as Sunday.
   const [date, setDate] = useState(() => isoDate(Date.now() - new Date().getTimezoneOffset() * 60000));

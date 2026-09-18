@@ -1,12 +1,12 @@
 /**
  * GET    /api/events/<id>/photos - what photos this mixer has
  * POST   /api/events/<id>/photos - add one taken on a phone
- * DELETE /api/events/<id>/photos - remove one (organiser)
+ * DELETE /api/events/<id>/photos - remove one (organizer)
  *
  * Adding a photo is open to anyone with the link, exactly like entering a
  * score, and for the same reason: at a club mixer the person with the camera is
  * whoever happened to be standing there, and a login would cost more than it
- * protects. The organiser can delete anything, which is the counterweight.
+ * protects. The organizer can delete anything, which is the counterweight.
  *
  * The image arrives already downscaled and base64'd by the browser. The server
  * does not re-encode it - it has no pixels library and no reason to spend
@@ -138,10 +138,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 export async function DELETE(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const code = await eventFrom(ctx.params);
   if (!code) return Response.json({ error: "That is not a valid event code." }, { status: 400 });
-  // Anyone may add a photo; only the organiser may remove one. Deleting is the
+  // Anyone may add a photo; only the organizer may remove one. Deleting is the
   // irreversible half, and the only moderation the club has.
   if (!isAdminRequest(request)) {
-    return Response.json({ error: "Organisers only." }, { status: 401 });
+    return Response.json({ error: "Organizers only." }, { status: 401 });
   }
 
   let body: unknown;

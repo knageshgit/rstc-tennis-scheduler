@@ -1,5 +1,5 @@
 /**
- * Checks the organiser gate: which URLs open, which PINs unlock, and what the
+ * Checks the organizer gate: which URLs open, which PINs unlock, and what the
  * cookie is worth once a secret is rotated.
  *
  * The gate is the only thing standing between a club WhatsApp group and the
@@ -89,7 +89,7 @@ withEnv("7f3a91c2d4e8", "8461", () => {
   check("a made-up cookie does not", !checkCookie("0".repeat(64)));
 
   // What the route handlers actually see.
-  check("a request with the cookie is an organiser", isAdminRequest(req(`${ADMIN_COOKIE}=${value}`)));
+  check("a request with the cookie is an organizer", isAdminRequest(req(`${ADMIN_COOKIE}=${value}`)));
   check(
     "the cookie is found among others",
     isAdminRequest(req(`theme=dark; ${ADMIN_COOKIE}=${value}; other=1`))
@@ -127,7 +127,7 @@ withEnv("7f3a91c2d4e8", "8461", () => {
 withEnv("7f3a91c2d4e8", undefined, () => {
   check("with no PIN the path alone still gates the route", !checkToken("wrong"));
   check("with no PIN nothing needs unlocking", checkPin("") && checkCookie(undefined));
-  check("with no PIN any request is an organiser", isAdminRequest(req(null)));
+  check("with no PIN any request is an organizer", isAdminRequest(req(null)));
 });
 
 withEnv(undefined, "8461", () => {

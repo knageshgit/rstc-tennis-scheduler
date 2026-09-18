@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The organiser's controls for one tournament: rename it, see how far the
+ * The organizer's controls for one tournament: rename it, see how far the
  * draw makes people walk, take the whole record away, and moderate what
  * members have posted to it.
  *
@@ -44,7 +44,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
    * Which tournament the "Saved" line belongs to, or null for none showing.
    *
    * The code rather than a boolean, so the confirmation survives the reload
-   * that renaming triggers but disappears the moment the organiser types a
+   * that renaming triggers but disappears the moment the organizer types a
    * different event code. A flag cleared on reload was wiped before it could
    * be read; one never cleared would follow you to the next tournament.
    */
@@ -383,7 +383,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
  *
  * The scheduler already works to keep people where they are - that is what the
  * travel costs in `lib/scheduler` are for - but until now nothing showed the
- * organiser the result, so a draw that happened to march one player across the
+ * organizer the result, so a draw that happened to march one player across the
  * club five times looked exactly like one that did not. This is that check,
  * per player, before anyone is standing on a court.
  *

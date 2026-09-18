@@ -1,11 +1,11 @@
 /**
  * GET    /api/events/<id>/chat - the conversation
  * POST   /api/events/<id>/chat - say something
- * DELETE /api/events/<id>/chat - remove one message, or clear the lot (organiser)
+ * DELETE /api/events/<id>/chat - remove one message, or clear the lot (organizer)
  *
  * Posting is open, like entering a score and adding a photo, and for the same
  * reason: the people at the mixer are the people with the link, and a login
- * would cost the club more than it protects. Deleting is the organiser's alone.
+ * would cost the club more than it protects. Deleting is the organizer's alone.
  */
 import { isAdminRequest } from "@/lib/admin";
 import {
@@ -110,7 +110,7 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
   const code = await codeFrom(ctx.params);
   if (!code) return Response.json({ error: "That is not a valid event code." }, { status: 400 });
   if (!isAdminRequest(request)) {
-    return Response.json({ error: "Organisers only." }, { status: 401 });
+    return Response.json({ error: "Organizers only." }, { status: 401 });
   }
 
   let body: unknown;

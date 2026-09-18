@@ -3,9 +3,9 @@
  *
  * The body carries the whole schedule. Nothing about it is recomputed here:
  * the browser has already run the engine, and re-running it on the server could
- * produce a different schedule from the one the organiser is looking at.
+ * produce a different schedule from the one the organizer is looking at.
  *
- * Organisers only, since publishing also moves the club link: without the gate
+ * Organizers only, since publishing also moves the club link: without the gate
  * anyone who found the site could point the root page at a schedule of their
  * own. Reading an event and entering a score stay open to everybody.
  */
@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   if (!isAdminRequest(request)) {
-    return Response.json({ error: "Organisers only." }, { status: 401 });
+    return Response.json({ error: "Organizers only." }, { status: 401 });
   }
   if (!isStoreConfigured()) {
     return Response.json(
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       schedule
     );
     // Publishing is also the moment the club link starts pointing here, so the
-    // organiser never has to hand out a new URL. If this write fails the event
+    // organizer never has to hand out a new URL. If this write fails the event
     // itself is still fine and reachable by its own code, so it is not fatal.
     let current = true;
     try {

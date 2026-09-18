@@ -1055,7 +1055,7 @@ export interface PlayerTravel {
   /**
    * Court number for each round, or null for a round they sit out.
    *
-   * Full length, byes included, so the organiser's table lines up round for
+   * Full length, byes included, so the organizer's table lines up round for
    * round across every player. The counts below still bridge over byes: a
    * player who sits out between two matches on the same court has not moved.
    */
@@ -1080,7 +1080,7 @@ export interface PlayerTravel {
 
 /**
  * Per-player movement, which is what both the player's own day strip and the
- * organiser's movement table are asking for.
+ * organizer's movement table are asking for.
  *
  * Two things are deliberately not counted as a move. A bye is bridged over:
  * sitting out round 3 between two matches on Shorebird 1 has not moved anyone

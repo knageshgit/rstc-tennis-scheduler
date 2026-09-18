@@ -88,7 +88,7 @@ const full: Scores = {};
 for (const rnd of schedule.rounds) for (const m of rnd.matches) full[matchKey(rnd.number, m.court)] = 8;
 
 const done = summarize(ev, full, "2026-09-05", 1_000);
-eq("the date the organiser gave is kept", done.date, "2026-09-05");
+eq("the date the organizer gave is kept", done.date, "2026-09-05");
 eq("the format comes off the schedule", done.format, "mixed");
 eq("the roster size is recorded", done.players, 24);
 eq("the round count is recorded", done.rounds, 5);

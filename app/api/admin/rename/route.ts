@@ -9,7 +9,7 @@
  * once people have read it.
  *
  * So this changes the one field, on an event that already exists, and touches
- * nothing else. Organisers only: the name is what every member sees at the top
+ * nothing else. Organizers only: the name is what every member sees at the top
  * of the page.
  */
 import { isAdminRequest } from "@/lib/admin";
@@ -28,7 +28,7 @@ const MAX_TITLE = 120;
 
 export async function POST(request: Request) {
   if (!isAdminRequest(request)) {
-    return Response.json({ error: "Organisers only." }, { status: 401 });
+    return Response.json({ error: "Organizers only." }, { status: 401 });
   }
   if (!isStoreConfigured()) {
     return Response.json(

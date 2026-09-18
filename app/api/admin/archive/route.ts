@@ -2,13 +2,13 @@
  * POST   /api/admin/archive - file a finished tournament in the results archive
  * DELETE /api/admin/archive - take one back out
  *
- * Archiving is a deliberate act by the organiser, not something that happens
+ * Archiving is a deliberate act by the organizer, not something that happens
  * when a mixer is published or when the last score lands. The club asked for it
  * that way: a schedule is published the night before and scored all morning, so
  * the only person who knows a tournament is actually over is the one running
  * it. It also means the members' results page never shows a half-finished day.
  *
- * Organisers only, for the same reason publishing is: this writes what the club
+ * Organizers only, for the same reason publishing is: this writes what the club
  * shows on its own website.
  */
 import { isAdminRequest } from "@/lib/admin";
@@ -31,7 +31,7 @@ const noStore = { headers: { "cache-control": "no-store" } };
 /** Both verbs need the same three checks before they touch anything. */
 async function guard(request: Request): Promise<Response | string> {
   if (!isAdminRequest(request)) {
-    return Response.json({ error: "Organisers only." }, { status: 401 });
+    return Response.json({ error: "Organizers only." }, { status: 401 });
   }
   if (!isStoreConfigured()) {
     return Response.json(

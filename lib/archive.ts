@@ -64,12 +64,12 @@ export interface ArchiveEntry {
    * A plain date string, not a timestamp, because this is a calendar date and
    * never a moment: the club plays on a Saturday morning, and an epoch would
    * have to be rendered back through a timezone to say so. It also sorts
-   * correctly as text, which is all the ordering the table needs. The organiser
+   * correctly as text, which is all the ordering the table needs. The organizer
    * sets it, defaulting to the day the schedule was published, because a
    * schedule is often generated the evening before.
    */
   date: string;
-  /** What the organiser called the mixer; may be empty. */
+  /** What the organizer called the mixer; may be empty. */
   title: string;
   format: Format;
   players: number;
@@ -110,7 +110,7 @@ export interface ArchiveEntry {
  * How a format is named to members, who do not know the internal words.
  *
  * Read off `FORMATS` rather than restated here, so the results page and the
- * organiser's format picker can never end up calling the same draw two things.
+ * organizer's format picker can never end up calling the same draw two things.
  */
 export function formatLabel(format: Format): string {
   return FORMATS.find((f) => f.value === format)?.label ?? format;
@@ -128,7 +128,7 @@ export function isValidDate(s: unknown): s is string {
 /**
  * The date part of a timestamp, in UTC.
  *
- * Only a fallback for when the organiser does not pick a date. The admin page
+ * Only a fallback for when the organizer does not pick a date. The admin page
  * sends one taken from the browser, which is the timezone the club is actually
  * in; the server has no business guessing that.
  */

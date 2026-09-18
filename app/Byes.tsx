@@ -5,12 +5,12 @@
  *
  * This used to be a grey one-line footnote under each round, and on the day it
  * was the line people missed: a player who is not on any court has nothing else
- * on the page telling them so, and the organiser reading names out needs it as
+ * on the page telling them so, and the organizer reading names out needs it as
  * much as the court assignments. So it gets its own block, with the same weight
  * as a match card but a dashed edge, because nobody is playing in it.
  *
- * Shared by the organiser's page and the members' page. The two want slightly
- * different things from it - the organiser needs the M/F marks that explain why
+ * Shared by the organizer's page and the members' page. The two want slightly
+ * different things from it - the organizer needs the M/F marks that explain why
  * a gendered format benched who it did, a member needs their own name to jump
  * out - so both are options rather than two near-identical copies that drift.
  */

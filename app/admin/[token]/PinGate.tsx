@@ -6,7 +6,7 @@
  *
  * The PIN never reaches the browser: it is checked on the server, which answers
  * with an httpOnly cookie. So the worst this component can leak is whatever the
- * organiser types into it. On success it refreshes rather than navigating,
+ * organizer types into it. On success it refreshes rather than navigating,
  * because the same URL now renders the generator.
  */
 import Link from "next/link";
@@ -44,9 +44,9 @@ export default function PinGate({ token }: { token: string }) {
 
   return (
     <main className="mx-auto flex min-h-[70vh] w-full max-w-sm flex-col justify-center px-4">
-      <h1 className="text-xl font-bold">🎾 Organiser</h1>
+      <h1 className="text-xl font-bold">🎾 Organizer</h1>
       <p className="mt-2 text-sm opacity-70">
-        Enter the organiser PIN to build and publish a schedule. This device will stay
+        Enter the organizer PIN to build and publish a schedule. This device will stay
         unlocked for a month.
       </p>
 

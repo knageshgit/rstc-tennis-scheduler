@@ -75,7 +75,7 @@ function rowsToPlayers(
 }
 
 /**
- * The organiser's screen: build a schedule, then publish it to the club link.
+ * The organizer's screen: build a schedule, then publish it to the club link.
  *
  * This was the whole app until v6. It now sits behind the gate in `lib/admin`
  * because publishing moves the link the club opens, and generating a schedule
@@ -112,7 +112,7 @@ export default function Generator({
   const fileInput = useRef<HTMLInputElement>(null);
 
   // Roster entry: upload a spreadsheet, or type the registrants in directly.
-  // Publishing for score entry. Local until the organiser asks for it: the
+  // Publishing for score entry. Local until the organizer asks for it: the
   // schedule only leaves the browser when they press the button.
   const [eventId, setEventId] = useState<string>("");
   const [publishing, setPublishing] = useState(false);
@@ -328,7 +328,7 @@ export default function Generator({
         body: JSON.stringify({
           schedule,
           courtNames: usedCourtNames,
-          // What the organiser typed, and nothing inferred. An empty name is
+          // What the organizer typed, and nothing inferred. An empty name is
           // a real answer: the members' page falls back to "Tennis mixer",
           // which is better than the name of a spreadsheet.
           title: title.trim(),
@@ -429,7 +429,7 @@ export default function Generator({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-              Organiser
+              Organizer
             </p>
             <h1 className="text-2xl font-bold sm:text-3xl">
               🎾 Tennis Doubles Mixer Scheduler
