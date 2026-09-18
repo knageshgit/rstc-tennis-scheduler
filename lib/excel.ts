@@ -3,6 +3,9 @@
  */
 import ExcelJS from "exceljs";
 
+import { drawQuality, teamGapAvg } from "./quality";
+import { MIN_COURT_RATINGS, summarizeSurvey, type Ratings } from "./survey";
+
 import {
   DEFAULT_COURT_NAMES,
   FORMATS,
@@ -16,7 +19,6 @@ import {
   drawLabel,
   playerStats,
   round2,
-  teamGap,
   teamAvg,
 } from "./scheduler";
 import {
@@ -222,7 +224,9 @@ function byesText(s: Schedule, byes: number[]): string {
 export async function buildScheduleWorkbook(
   s: Schedule,
   courtNames: string[] = DEFAULT_COURT_NAMES,
-  scores?: Scores
+  scores?: Scores,
+  /** Survey ratings, when known: adds the star averages to Match Quality. */
+  ratings?: Ratings
 ): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Tennis Doubles Mixer Scheduler";
@@ -313,7 +317,8 @@ export async function buildScheduleWorkbook(
         ...(scored ? [gb ?? ""] : []),
         round2(courtAvg(s, m)),
         round2(courtSpread(s, m)),
-        round2(teamGap(s, m)),
+        // On team means, the numbers beside each team, not the scheduler's sums.
+        teamGapAvg(s, m),
       ]);
       row.eachCell((cell, col) => {
         cell.border = BORDER;
@@ -398,6 +403,7 @@ export async function buildScheduleWorkbook(
   ps.views = [{ state: "frozen", ySplit: 1 }];
 
   addMovementSheet(wb, s, courtNames);
+  addQualitySheet(wb, s, courtNames, ratings);
 
   if (scored) addLeaderboardSheet(wb, s, sc);
 
@@ -488,6 +494,150 @@ function addMovementSheet(wb: ExcelJS.Workbook, s: Schedule, courtNames?: string
 
   autosize(ws);
   ws.views = [{ state: "frozen", ySplit: headRow, xSplit: 1 }];
+}
+
+// ---- match quality ---------------------------------------------------------
+/**
+ * How evenly matched the draw is, in NTRP levels: the whole tournament, then
+ * each round, then each match. The same figures as the organizer page's Match
+ * quality panel (both read `drawQuality`).
+ *
+ * With survey ratings, star averages sit beside the levels, which is the point
+ * of putting them together: whether the tighter courts were the ones people
+ * enjoyed. A single court's stars wait for MIN_COURT_RATINGS answers, as they
+ * do on screen.
+ */
+function addQualitySheet(
+  wb: ExcelJS.Workbook,
+  s: Schedule,
+  courtNames?: string[],
+  ratings?: Ratings
+) {
+  const ws = wb.addWorksheet("Match Quality");
+  const q = drawQuality(s);
+  const survey = ratings ? summarizeSurvey(s, ratings) : null;
+  const withStars = !!survey && survey.matches.count > 0;
+  const stars = (count: number, avg: number, min = 1) =>
+    count === 0 ? ["", 0] : count < min ? ["too few", count] : [round2(avg), count];
+
+  const styleHead = (row: ExcelJS.Row) =>
+    row.eachCell((cell) => {
+      cell.fill = HEADER_FILL;
+      cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = BORDER;
+    });
+  // Levels print to two places, as on screen, so a column lines up.
+  const styleBody = (row: ExcelJS.Row, levelCols: number[]) =>
+    row.eachCell((cell, col) => {
+      cell.border = BORDER;
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      if (levelCols.includes(col)) cell.numFmt = "0.00";
+    });
+
+  const title = ws.addRow(["Match quality (NTRP levels)"]);
+  title.getCell(1).font = { bold: true, size: 14 };
+  const summary: [string, string | number][] = [
+    ["Lowest level on court", q.low],
+    ["Highest level on court", q.high],
+    ["Average level", q.avg],
+    ["Average spread per match", q.avgSpread],
+    ["Average team gap", q.avgGap],
+    ["Widest court", q.widest],
+    ...(withStars && survey
+      ? ([["Tennis rated (stars)", `${round2(survey.matches.avg)} from ${survey.matches.count}`]] as [
+          string,
+          string,
+        ][])
+      : []),
+  ];
+  for (const [label, value] of summary) {
+    const row = ws.addRow([label, value]);
+    row.getCell(1).font = { bold: true };
+    row.getCell(2).alignment = { horizontal: "left" };
+    if (typeof value === "number") row.getCell(2).numFmt = "0.00";
+  }
+
+  ws.addRow([]);
+  const byRound = ws.addRow(["By round"]);
+  byRound.getCell(1).font = { bold: true, size: 12 };
+  styleHead(
+    ws.addRow([
+      "Round",
+      "Lowest",
+      "Highest",
+      "Average",
+      "Avg spread",
+      "Avg team gap",
+      "Widest court",
+      ...(withStars ? ["Avg stars", "Ratings"] : []),
+    ])
+  );
+  for (const r of q.rounds) {
+    const t = survey?.rounds.find((x) => x.round === r.round);
+    styleBody(
+      ws.addRow([
+        r.round,
+        r.low,
+        r.high,
+        r.avg,
+        r.avgSpread,
+        r.avgGap,
+        r.widest,
+        ...(withStars ? stars(t?.count ?? 0, t?.avg ?? 0) : []),
+      ]),
+      [2, 3, 4, 5, 6, 7]
+    );
+  }
+
+  ws.addRow([]);
+  const byMatch = ws.addRow(["By match"]);
+  byMatch.getCell(1).font = { bold: true, size: 12 };
+  styleHead(
+    ws.addRow([
+      "Round",
+      "Court",
+      "Lowest",
+      "Highest",
+      "Average",
+      "Spread",
+      "Team gap",
+      ...(withStars ? ["Avg stars", "Ratings"] : []),
+    ])
+  );
+  for (const r of q.rounds) {
+    const t = survey?.rounds.find((x) => x.round === r.round);
+    for (const m of r.matches) {
+      const mt = t?.matches.find((x) => x.court === m.court);
+      styleBody(
+        ws.addRow([
+          r.round,
+          courtName(m.court, courtNames),
+          m.low,
+          m.high,
+          m.avg,
+          m.spread,
+          m.gap,
+          ...(withStars ? stars(mt?.count ?? 0, mt?.avg ?? 0, MIN_COURT_RATINGS) : []),
+        ]),
+        [3, 4, 5, 6, 7]
+      );
+    }
+  }
+
+  ws.addRow([]);
+  const note = ws.addRow([
+    "Lowest and Highest are the lowest and highest rated players on court; Average is " +
+      "the mean of the four. Spread is Highest minus Lowest. Team gap is the difference " +
+      "between the two teams' levels, a team's level being the mean of its partners. " +
+      "A round's figures are over its courts, and the tournament's over every match.",
+  ]);
+  ws.mergeCells(note.number, 1, note.number, 9);
+  note.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
+  note.getCell(1).alignment = { wrapText: true, vertical: "top" };
+  note.height = 45;
+
+  autosize(ws);
 }
 
 // ---- leaderboard -----------------------------------------------------------

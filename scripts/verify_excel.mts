@@ -3,6 +3,7 @@
 // Run: npx tsx scripts/verify_excel.mts
 import ExcelJS from "exceljs";
 import { buildScheduleWorkbook } from "../lib/excel.ts";
+import { drawQuality } from "../lib/quality.ts";
 import {
   generateSchedule,
   playerTravel,
@@ -82,6 +83,25 @@ for (const format of ["open", "mixed", "same"] as Format[]) {
 
   // By Player sheet has one row per player plus a header
   check(ps.rowCount === players.length + 1, `${format}: By Player has ${ps.rowCount} rows`);
+
+  // Match Quality: the tournament figures are drawQuality's, and there is a
+  // row for every match.
+  const qs = wb.getWorksheet("Match Quality");
+  check(!!qs, `${format}: no Match Quality sheet`);
+  if (qs) {
+    const dq = drawQuality(s);
+    const byLabel = new Map<string, unknown>();
+    qs.eachRow((row) => byLabel.set(String(row.getCell(1).value), row.getCell(2).value));
+    check(byLabel.get("Average level") === dq.avg, `${format}: quality average`);
+    check(byLabel.get("Average spread per match") === dq.avgSpread, `${format}: quality spread`);
+    let matchRows = 0;
+    let inMatches = false;
+    qs.eachRow((row) => {
+      if (row.getCell(1).value === "By match") inMatches = true;
+      else if (inMatches && typeof row.getCell(1).value === "number") matchRows += 1;
+    });
+    check(matchRows === dq.matches, `${format}: Match Quality lists ${matchRows} of ${dq.matches} matches`);
+  }
 
   // Player Movement: one row per player, and its counts are the scheduler's.
   const mv = wb.getWorksheet("Player Movement");

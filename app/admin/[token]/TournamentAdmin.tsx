@@ -21,12 +21,21 @@ import {
   type Schedule,
 } from "@/lib/scheduler";
 import { fmtBytes, type PhotoMeta } from "@/lib/photos";
+import { drawQuality, fmtLevel } from "@/lib/quality";
+import {
+  MIN_COURT_RATINGS,
+  fmtStars,
+  summarizeSurvey,
+  type Ratings,
+  type Tally,
+} from "@/lib/survey";
 
 interface Loaded {
   code: string;
   event: BundleEvent | null;
   photos: PhotoMeta[];
   messages: ChatMessage[];
+  ratings: Ratings;
 }
 
 export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
@@ -65,10 +74,11 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
           return null;
         }
       };
-      const [ev, ph, ch] = await Promise.all([
+      const [ev, ph, ch, sv] = await Promise.all([
         get<BundleEvent & { error?: string }>(`/api/events/${clean}`),
         get<{ photos: PhotoMeta[] }>(`/api/events/${clean}/photos`),
         get<{ messages: ChatMessage[] }>(`/api/events/${clean}/chat`),
+        get<{ ratings: Ratings }>(`/api/events/${clean}/survey`),
       ]);
       if (cancelled) return;
       const event = ev && ev.id && ev.schedule ? (ev as BundleEvent) : null;
@@ -78,6 +88,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
         event,
         photos: ph?.photos ?? [],
         messages: ch?.messages ?? [],
+        ratings: sv?.ratings ?? {},
       });
       setError(event ? "" : "No event with that code.");
     })();
@@ -253,6 +264,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
         </p>
 
         {data?.event && <MovementTable schedule={data.event.schedule} />}
+        {data?.event && <QualityPanel schedule={data.event.schedule} ratings={data.ratings} />}
 
         {error && (
           <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200">
@@ -477,4 +489,137 @@ function MovementTable({ schedule }: { schedule: Schedule }) {
       )}
     </div>
   );
+}
+
+/**
+ * How evenly matched the draw is, in NTRP levels, beside how the players rated
+ * it. Collapsed like Player movement.
+ *
+ * Tournament figures first, then one row per round; tap a round for its
+ * courts. The star columns are the survey's, so a round that was tight on paper
+ * and still rated poorly (or the reverse) shows up side by side. A single
+ * court's stars wait for MIN_COURT_RATINGS answers, even here: the organizer
+ * knows who was on each court, so a two-rating average would give an answer
+ * away just as it would to a member.
+ */
+function QualityPanel({ schedule, ratings }: { schedule: Schedule; ratings: Ratings }) {
+  const [open, setOpen] = useState(false);
+  const [round, setRound] = useState<number | null>(null);
+  const names = schedule.courtNames ?? [];
+  const q = drawQuality(schedule);
+  const survey = summarizeSurvey(schedule, ratings);
+
+  return (
+    <div className="mt-4 rounded-lg border border-black/10 p-3 dark:border-white/15">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-baseline justify-between gap-3 text-left"
+      >
+        <span className="text-sm font-semibold">Match quality</span>
+        <span className="text-xs tabular-nums opacity-60">
+          avg spread {fmtLevel(q.avgSpread)} · avg gap {fmtLevel(q.avgGap)} · widest{" "}
+          {fmtLevel(q.widest)} <span className="opacity-70">{open ? "▲" : "▼"}</span>
+        </span>
+      </button>
+      {open && (
+        <>
+          <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <QStat label="Lowest" value={fmtLevel(q.low)} />
+            <QStat label="Highest" value={fmtLevel(q.high)} />
+            <QStat label="Average" value={fmtLevel(q.avg)} />
+            <QStat label="Tennis rated" value={starText(survey.matches)} />
+          </dl>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="border-b border-black/10 text-left text-xs uppercase tracking-wide opacity-60 dark:border-white/15">
+                  <th className="py-2 pr-2">Round</th>
+                  <th className="py-2 pr-2 text-right">Lowest</th>
+                  <th className="py-2 pr-2 text-right">Highest</th>
+                  <th className="py-2 pr-2 text-right">Average</th>
+                  <th className="py-2 pr-2 text-right whitespace-nowrap">Avg spread</th>
+                  <th className="py-2 pr-2 text-right whitespace-nowrap">Avg gap</th>
+                  <th className="py-2 pr-2 text-right">Widest</th>
+                  <th className="py-2 text-right">Stars</th>
+                </tr>
+              </thead>
+              <tbody>
+                {q.rounds.map((r) => {
+                  const t = survey.rounds.find((x) => x.round === r.round);
+                  const shown = round === r.round;
+                  return [
+                    <tr
+                      key={r.round}
+                      onClick={() => setRound(shown ? null : r.round)}
+                      className="cursor-pointer border-b border-black/5 hover:bg-black/[0.03] dark:border-white/10 dark:hover:bg-white/5"
+                    >
+                      <td className="py-2 pr-2 font-medium whitespace-nowrap">
+                        <span className="mr-1 text-xs opacity-50">{shown ? "▾" : "▸"}</span>
+                        Round {r.round}
+                      </td>
+                      <td className="py-2 pr-2 text-right">{fmtLevel(r.low)}</td>
+                      <td className="py-2 pr-2 text-right">{fmtLevel(r.high)}</td>
+                      <td className="py-2 pr-2 text-right">{fmtLevel(r.avg)}</td>
+                      <td className="py-2 pr-2 text-right font-semibold">{fmtLevel(r.avgSpread)}</td>
+                      <td className="py-2 pr-2 text-right">{fmtLevel(r.avgGap)}</td>
+                      <td className="py-2 pr-2 text-right">{fmtLevel(r.widest)}</td>
+                      <td className="py-2 text-right whitespace-nowrap">{starText(t)}</td>
+                    </tr>,
+                    ...(shown
+                      ? r.matches.map((m) => {
+                          const mt = t?.matches.find((x) => x.court === m.court);
+                          return (
+                            <tr
+                              key={`${r.round}-${m.court}`}
+                              className="border-b border-black/5 bg-black/[0.02] text-xs dark:border-white/10 dark:bg-white/[0.03]"
+                            >
+                              <td className="py-1.5 pr-2 pl-5 whitespace-nowrap opacity-70">
+                                {courtName(m.court, names)}
+                              </td>
+                              <td className="py-1.5 pr-2 text-right">{fmtLevel(m.low)}</td>
+                              <td className="py-1.5 pr-2 text-right">{fmtLevel(m.high)}</td>
+                              <td className="py-1.5 pr-2 text-right">{fmtLevel(m.avg)}</td>
+                              <td className="py-1.5 pr-2 text-right">{fmtLevel(m.spread)}</td>
+                              <td className="py-1.5 pr-2 text-right">{fmtLevel(m.gap)}</td>
+                              <td className="py-1.5 pr-2" />
+                              <td className="py-1.5 text-right whitespace-nowrap">
+                                {mt && mt.count > 0 && mt.count < MIN_COURT_RATINGS
+                                  ? "too few"
+                                  : starText(mt)}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      : []),
+                  ];
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs opacity-50">
+            Levels are NTRP. Lowest and Highest are the lowest and highest rated
+            players on court, Average the mean of the four, Spread Highest minus
+            Lowest. Team gap is the difference between the two teams&apos; levels
+            (a team&apos;s level being the mean of its partners, as shown beside
+            each team). Tap a round for its courts. Stars are the survey&apos;s,
+            and a court&apos;s own stars need {MIN_COURT_RATINGS} ratings.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-black/[0.03] p-2 dark:bg-white/5">
+      <dt className="text-xs uppercase tracking-wide opacity-60">{label}</dt>
+      <dd className="mt-0.5 font-semibold tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+/** "3.8 (12)" for a tally with answers, a dash for one without. */
+function starText(t?: Tally): string {
+  return t && t.count > 0 ? `${fmtStars(t.avg)} (${t.count})` : "–";
 }

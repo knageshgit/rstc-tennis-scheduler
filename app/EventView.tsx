@@ -31,6 +31,7 @@ import {
   type Match,
   type Schedule,
 } from "@/lib/scheduler";
+import { drawQuality, fmtLevel, type LevelStats } from "@/lib/quality";
 import Byes from "./Byes";
 import Logo from "./Logo";
 import Chat from "./Chat";
@@ -45,6 +46,7 @@ import {
 } from "@/lib/scoring";
 import {
   MAX_STARS,
+  MIN_COURT_RATINGS,
   fmtStars,
   matchesFor,
   overallKey,
@@ -339,7 +341,7 @@ export default function EventView({
   async function downloadExcel() {
     if (!data) return;
     const { buildScheduleWorkbook } = await import("@/lib/excel");
-    const buf = await buildScheduleWorkbook(data.schedule, data.courtNames, scores);
+    const buf = await buildScheduleWorkbook(data.schedule, data.courtNames, scores, ratings);
     const blob = new Blob([buf], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
@@ -1713,13 +1715,11 @@ function SurveyResults({
   round: number;
   onRound: (round: number) => void;
 }) {
-  if (!survey || (survey.matches.count === 0 && survey.overall.count === 0)) {
-    return (
-      <p className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-        Nobody has rated anything yet. Ratings appear here as they come in.
-      </p>
-    );
-  }
+  if (!survey) return null;
+  // The draw's NTRP levels, shown beside the stars. They exist before anyone
+  // has rated anything, so the pane renders them even while it is empty.
+  const quality = drawQuality(schedule);
+  const nothing = survey.matches.count === 0 && survey.overall.count === 0;
 
   const rated = survey.rounds.filter((r) => r.count > 0);
   const best = rated.length
@@ -1731,6 +1731,11 @@ function SurveyResults({
 
   return (
     <div>
+      {nothing && (
+        <p className="mb-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          Nobody has rated anything yet. Ratings appear here as they come in.
+        </p>
+      )}
       <dl className="grid grid-cols-2 gap-3">
         <Headline
           label="The tournament"
@@ -1748,6 +1753,7 @@ function SurveyResults({
         {survey.responders} of {schedule.players.length} players have rated
         something. Updates as answers come in.
       </p>
+      <LevelsLine label="NTRP levels, every match" stats={quality} />
 
       <h3 className="mt-6 mb-2 text-sm font-semibold">Round by round</h3>
       <RoundTabs
@@ -1791,15 +1797,32 @@ function SurveyResults({
               )}
             </div>
 
-            {r.count > 0 && (
-              <ul className="mt-2 space-y-1">
-                {r.matches.map((m) => (
+            {(() => {
+              const rq = quality.rounds.find((x) => x.round === r.round);
+              return rq ? <LevelsLine label="NTRP levels" stats={rq} /> : null;
+            })()}
+
+            {/* Every court, rated or not: its levels are known from the draw,
+                and the stars fill in as the answers arrive. */}
+            <ul className="mt-2 space-y-1">
+              {r.matches.map((m) => {
+                const mq = quality.rounds
+                  .find((x) => x.round === r.round)
+                  ?.matches.find((x) => x.court === m.court);
+                return (
                   <li
                     key={m.court}
-                    className="flex items-baseline justify-between gap-2 text-xs"
+                    className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-3 text-xs"
                   >
                     <span className="truncate opacity-60">{courtName(m.court, names)}</span>
-                    {m.count >= 3 ? (
+                    <span className="tabular-nums opacity-60">
+                      {mq && (
+                        <>
+                          {fmtLevel(mq.low)} to {fmtLevel(mq.high)} · avg {fmtLevel(mq.avg)}
+                        </>
+                      )}
+                    </span>
+                    {m.count >= MIN_COURT_RATINGS ? (
                       <span className="shrink-0">
                         <span className="text-amber-500">{starBar(m.avg)}</span>{" "}
                         <span className="tabular-nums">{fmtStars(m.avg)}</span>
@@ -1814,18 +1837,32 @@ function SurveyResults({
                       </span>
                     )}
                   </li>
-                ))}
-              </ul>
-            )}
+                );
+              })}
+            </ul>
           </div>
         ))}
       </div>
 
       <p className="mt-4 text-xs opacity-50">
-        A court shows its own average once three of its four players have rated
-        it. Below that the average would give away an individual answer.
+        A court shows its own star average once three of its four players have
+        rated it. Below that the average would give away an individual answer.
+        Levels are NTRP: Lowest and Highest are the lowest and highest rated
+        players on court, and Average is the mean of the four.
       </p>
     </div>
+  );
+}
+
+/** "NTRP levels · Lowest 3.00 · Highest 4.00 · Average 3.45", for a round or the day. */
+function LevelsLine({ label, stats }: { label: string; stats: LevelStats }) {
+  return (
+    <p className="mt-2 text-xs tabular-nums">
+      <span className="opacity-60">{label}:</span> Lowest{" "}
+      <span className="font-semibold">{fmtLevel(stats.low)}</span> · Highest{" "}
+      <span className="font-semibold">{fmtLevel(stats.high)}</span> · Average{" "}
+      <span className="font-semibold">{fmtLevel(stats.avg)}</span>
+    </p>
   );
 }
 

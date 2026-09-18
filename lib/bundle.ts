@@ -26,6 +26,7 @@ import { leaderboards, type Scores } from "./scoring";
 import type { Schedule } from "./scheduler";
 import { formatLabel } from "./archive";
 import type { PhotoMeta } from "./photos";
+import type { Ratings } from "./survey";
 
 export interface BundleEvent {
   id: string;
@@ -60,6 +61,10 @@ export async function buildTournamentBundle(
   const scores = await getJSON<{ scores: Scores }>(`/api/events/${event.id}/scores`);
   const scoreMap = scores?.scores ?? {};
 
+  // The survey feeds the star columns on the workbook's Match Quality sheet.
+  const survey = await getJSON<{ ratings: Ratings }>(`/api/events/${event.id}/survey`);
+  const ratings = survey?.ratings ?? {};
+
   onProgress({ step: "Reading the chat", done: 0.12 });
   const chat = await getJSON<{ messages: ChatMessage[] }>(`/api/events/${event.id}/chat`);
   const messages = chat?.messages ?? [];
@@ -72,7 +77,8 @@ export async function buildTournamentBundle(
   const workbook = await buildScheduleWorkbook(
     event.schedule,
     event.courtNames?.length ? event.courtNames : event.schedule.courtNames,
-    scoreMap
+    scoreMap,
+    ratings
   );
   zip.file(`${base}/schedule-and-scores.xlsx`, workbook);
 
@@ -231,7 +237,8 @@ function readme(
     "----------------------",
     "schedule-and-scores.xlsx   Every round, who played whom, the games won,",
     "                           a sheet per player, where each player moved",
-    "                           (venue changes and swaps), and the leaderboards.",
+    "                           (venue changes and swaps), how evenly matched",
+    "                           each round was, and the leaderboards.",
     "leaderboard.csv            The standings again, as plain CSV.",
     `chat.txt                   The mixer chat, ${messages.length} message${messages.length === 1 ? "" : "s"}.`,
     `photos/                    ${photos.length} photo${photos.length === 1 ? "" : "s"}, numbered in the order taken.`,

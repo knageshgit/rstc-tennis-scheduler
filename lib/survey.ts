@@ -110,6 +110,15 @@ export interface SurveySummary {
   responders: number;
 }
 
+/**
+ * Ratings a single court needs before its own average is shown anywhere.
+ *
+ * Four players share a court, so with two ratings in and one of them yours the
+ * mean hands back the other person's answer. Three is where an individual score
+ * stops being recoverable. Round and tournament averages are not held back.
+ */
+export const MIN_COURT_RATINGS = 3;
+
 /** Build a `Tally` from a list of star counts. */
 function tally(stars: number[]): Tally {
   if (!stars.length) return { count: 0, avg: 0 };

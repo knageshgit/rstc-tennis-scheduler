@@ -12,6 +12,7 @@
  *
  * Run with: npx tsx scripts/verify_archive.mts
  */
+import { drawQuality } from "../lib/quality.ts";
 import {
   bySeason,
   formatLabel,
@@ -88,6 +89,12 @@ const full: Scores = {};
 for (const rnd of schedule.rounds) for (const m of rnd.matches) full[matchKey(rnd.number, m.court)] = 8;
 
 const done = summarize(ev, full, "2026-09-05", 1_000);
+{
+  // The draw's NTRP figures are filed with the row, matching lib/quality.
+  const dq = drawQuality(ev.schedule);
+  eq("the archived average spread is the draw's", done.quality?.avgSpread, dq.avgSpread);
+  eq("the archived level range is the draw's", [done.quality?.low, done.quality?.high], [dq.low, dq.high]);
+}
 eq("the date the organizer gave is kept", done.date, "2026-09-05");
 eq("the format comes off the schedule", done.format, "mixed");
 eq("the roster size is recorded", done.players, 24);

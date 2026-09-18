@@ -22,10 +22,12 @@ import {
   bySeason,
   formatLabel,
   type ArchiveEntry,
+  type ArchiveQuality,
   type ArchiveSurvey,
   type Standing,
 } from "@/lib/archive";
 import type { Format } from "@/lib/scheduler";
+import { fmtLevel } from "@/lib/quality";
 import { fmtStars, starBar } from "@/lib/survey";
 import { getArchive, isStoreConfigured } from "@/lib/store";
 
@@ -129,6 +131,7 @@ function ResultsTable({ entries }: { entries: ArchiveEntry[] }) {
               <th className="px-3 py-3">Top 3 men</th>
               <th className="px-3 py-3">Top 3 women</th>
               <th className="hidden w-px px-3 py-3 lg:table-cell">Rated</th>
+              <th className="hidden w-px px-3 py-3 whitespace-nowrap xl:table-cell">Levels</th>
               <th className="w-px px-3 py-3" />
             </tr>
           </thead>
@@ -193,6 +196,11 @@ function ResultsTable({ entries }: { entries: ArchiveEntry[] }) {
                     their way to the club to find out. */}
                 <td className="hidden px-3 py-3 align-top lg:table-cell">
                   <SurveyCell survey={e.survey} />
+                </td>
+                {/* Wider screens only: one more column at lg pushed the
+                    Leaderboard button off the end of the table. */}
+                <td className="hidden px-3 py-3 align-top xl:table-cell">
+                  <QualityCell quality={e.quality} />
                 </td>
                 <td className="px-3 py-3 text-right align-top whitespace-nowrap">
                   <Link
@@ -328,6 +336,25 @@ function SurveyCell({ survey }: { survey?: ArchiveSurvey }) {
           units in one line reads as a response rate that it is not. */}
       <div className="mt-0.5 opacity-40">
         {survey.responders} player{survey.responders === 1 ? "" : "s"}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How evenly matched a tournament's draw was, in NTRP levels: the average
+ * spread per match, with the range and average level underneath. Rows filed
+ * before v12 carry none and get a dash until they are archived again.
+ */
+function QualityCell({ quality }: { quality?: ArchiveQuality }) {
+  if (!quality) return <span className="text-xs opacity-30">–</span>;
+  return (
+    <div className="text-xs whitespace-nowrap tabular-nums">
+      <div>
+        spread <span className="font-semibold">{fmtLevel(quality.avgSpread)}</span>
+      </div>
+      <div className="mt-0.5 opacity-60">
+        {fmtLevel(quality.low)} to {fmtLevel(quality.high)} · avg {fmtLevel(quality.avg)}
       </div>
     </div>
   );

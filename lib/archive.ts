@@ -22,6 +22,7 @@
  * Everything here is pure. The Redis side lives in `lib/store`.
  */
 import { FORMATS, type Format, type Schedule } from "./scheduler";
+import { drawQuality } from "./quality";
 import { leaderboards, type PlayerScore, type Scores } from "./scoring";
 import { summarizeSurvey, type Ratings } from "./survey";
 
@@ -55,6 +56,16 @@ export interface ArchiveSurvey {
 }
 
 /** What the results table shows for one finished tournament. */
+/** The draw's level figures, for one archived tournament. */
+export interface ArchiveQuality {
+  low: number;
+  high: number;
+  avg: number;
+  avgSpread: number;
+  avgGap: number;
+  widest: number;
+}
+
 export interface ArchiveEntry {
   /** The event code, so the row can link to its leaderboard. */
   id: string;
@@ -98,6 +109,14 @@ export interface ArchiveEntry {
    * archived by a version that asked and got no answers.
    */
   survey?: ArchiveSurvey;
+  /**
+   * How evenly matched the draw was, in NTRP levels (see `lib/quality`).
+   *
+   * Optional because rows filed before v12 have none; the results page shows a
+   * dash for those until the tournament is archived again. Stored here for the
+   * same reason as the survey: the page reads the archive and nothing else.
+   */
+  quality?: ArchiveQuality;
   /** Were all the matches scored when this was archived? */
   complete: boolean;
   /** Matches scored / matches scheduled, at archive time. */
@@ -165,6 +184,7 @@ export function summarize(
   now: number = Date.now()
 ): ArchiveEntry {
   const board = leaderboards(ev.schedule, scores);
+  const q = drawQuality(ev.schedule);
   const survey = summarizeSurvey(ev.schedule, ratings);
   const winners = board.all.filter((r) => r.rank === 1 && r.games > 0);
   const courts = new Set<number>();
@@ -187,6 +207,14 @@ export function summarize(
       matches: { count: survey.matches.count, avg: survey.matches.avg },
       overall: { count: survey.overall.count, avg: survey.overall.avg },
       responders: survey.responders,
+    },
+    quality: {
+      low: q.low,
+      high: q.high,
+      avg: q.avg,
+      avgSpread: q.avgSpread,
+      avgGap: q.avgGap,
+      widest: q.widest,
     },
     complete: board.complete,
     entered: board.entered,

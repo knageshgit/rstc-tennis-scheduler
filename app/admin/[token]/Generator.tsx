@@ -24,11 +24,11 @@ import {
   generateSchedule,
   playerStats,
   round2,
-  teamGap,
   teamAvg,
   travelSummary,
   venueOf,
 } from "@/lib/scheduler";
+import { drawQuality, fmtLevel } from "@/lib/quality";
 import { parseBulkRoster, type Row } from "@/lib/roster";
 import Byes from "@/app/Byes";
 import { GAMES_PER_MATCH } from "@/lib/scoring";
@@ -406,22 +406,17 @@ export default function Generator({
     URL.revokeObjectURL(url);
   }
 
-  const metrics = useMemo(() => {
-    if (!schedule) return null;
-    const spreads: number[] = [];
-    const gaps: number[] = [];
-    for (const rnd of schedule.rounds)
-      for (const m of rnd.matches) {
-        spreads.push(courtSpread(schedule, m));
-        gaps.push(teamGap(schedule, m));
+  // From the same calculation as the organizer's Match quality panel and the
+  // Excel sheet, so the preview and the record never disagree. The team gap is
+  // on team means, the numbers shown beside each team.
+  const quality = useMemo(() => (schedule ? drawQuality(schedule) : null), [schedule]);
+  const metrics = quality
+    ? {
+        spread: fmtLevel(quality.avgSpread),
+        gap: fmtLevel(quality.avgGap),
+        maxSpread: fmtLevel(quality.widest),
       }
-    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
-    return {
-      spread: avg(spreads).toFixed(2),
-      gap: avg(gaps).toFixed(2),
-      maxSpread: Math.max(...spreads).toFixed(1),
-    };
-  }, [schedule]);
+    : null;
 
   return (
     <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-12">
@@ -1086,6 +1081,18 @@ export default function Generator({
                     </tbody>
                   </table>
                 </div>
+                {/* The round in one line, to spot the weak round when
+                    choosing between redraws. */}
+                {(() => {
+                  const rq = quality?.rounds.find((r) => r.round === rnd.number);
+                  return rq ? (
+                    <p className="mt-2 text-xs tabular-nums opacity-60">
+                      Levels {fmtLevel(rq.low)} to {fmtLevel(rq.high)} · average{" "}
+                      {fmtLevel(rq.avg)} · avg spread {fmtLevel(rq.avgSpread)} · avg gap{" "}
+                      {fmtLevel(rq.avgGap)} · widest {fmtLevel(rq.widest)}
+                    </p>
+                  ) : null;
+                })()}
                 <Byes schedule={schedule} byes={rnd.byes} showGender />
               </div>
             ))}
