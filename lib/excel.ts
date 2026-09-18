@@ -416,16 +416,13 @@ const MOVE_FILL: ExcelJS.Fill = {
  * The organizer page's Player movement table, as a sheet: the day's totals,
  * then every player's court by round with their venue changes and swaps.
  *
- * Sorted the same way as on screen, most venue changes first, so the players
- * the draw moves around the club are at the top.
+ * Alphabetical, the same order as on screen, with two or more venue changes
+ * highlighted.
  */
 function addMovementSheet(wb: ExcelJS.Workbook, s: Schedule, courtNames?: string[]) {
   const ws = wb.addWorksheet("Player Movement");
   const t = travelSummary(s);
-  const rows = [...playerTravel(s)].sort(
-    (a, b) =>
-      b.venueChanges - a.venueChanges || b.walks - a.walks || a.name.localeCompare(b.name)
-  );
+  const rows = [...playerTravel(s)].sort((a, b) => a.name.localeCompare(b.name));
   const headers = [
     "Player",
     ...s.rounds.map((r) => `R${r.number}`),

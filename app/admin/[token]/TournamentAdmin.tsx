@@ -387,16 +387,13 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
  * club five times looked exactly like one that did not. This is that check,
  * per player, before anyone is standing on a court.
  *
- * Sorted worst first, because the reason to open it is to find the person who
- * got a bad deal, not to read eighteen rows in roster order.
+ * Alphabetical, so an organizer can find a player by name. Anyone with two or
+ * more venue changes is still highlighted, so a bad deal stands out anyway.
  */
 function MovementTable({ schedule }: { schedule: Schedule }) {
   const [open, setOpen] = useState(false);
   const names = schedule.courtNames ?? [];
-  const rows = [...playerTravel(schedule)].sort(
-    (a, b) =>
-      b.venueChanges - a.venueChanges || b.walks - a.walks || a.name.localeCompare(b.name)
-  );
+  const rows = [...playerTravel(schedule)].sort((a, b) => a.name.localeCompare(b.name));
   const totals = travelSummary(schedule);
 
   return (

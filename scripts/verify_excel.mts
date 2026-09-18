@@ -106,6 +106,13 @@ for (const format of ["open", "mixed", "same"] as Format[]) {
       );
     }
     check(seen === players.length, `${format}: Player Movement lists ${seen} of ${players.length}`);
+    const listed: string[] = [];
+    for (let n = head + 1; n <= mv.rowCount; n++) {
+      const v = mv.getRow(n).getCell(1).value;
+      if (travel.some((t) => t.name === v)) listed.push(v as string);
+    }
+    const alpha = [...listed].sort((a, b) => a.localeCompare(b));
+    check(listed.join("|") === alpha.join("|"), `${format}: Player Movement is not alphabetical`);
     const total = mv.getRow(2).getCell(2).value;
     check(total === travelSummary(s).drives, `${format}: venue-change total ${total}`);
   }
