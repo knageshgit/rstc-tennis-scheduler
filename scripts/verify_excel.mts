@@ -3,7 +3,13 @@
 // Run: npx tsx scripts/verify_excel.mts
 import ExcelJS from "exceljs";
 import { buildScheduleWorkbook } from "../lib/excel.ts";
-import { generateSchedule, type Format, type Player } from "../lib/scheduler.ts";
+import {
+  generateSchedule,
+  playerTravel,
+  travelSummary,
+  type Format,
+  type Player,
+} from "../lib/scheduler.ts";
 import {
   GAMES_PER_MATCH,
   leaderboards,
@@ -76,6 +82,33 @@ for (const format of ["open", "mixed", "same"] as Format[]) {
 
   // By Player sheet has one row per player plus a header
   check(ps.rowCount === players.length + 1, `${format}: By Player has ${ps.rowCount} rows`);
+
+  // Player Movement: one row per player, and its counts are the scheduler's.
+  const mv = wb.getWorksheet("Player Movement");
+  check(!!mv, `${format}: no Player Movement sheet`);
+  if (mv) {
+    const travel = playerTravel(s);
+    let head = 0;
+    mv.eachRow((row, n) => {
+      if (row.getCell(1).value === "Player") head = n;
+    });
+    check(head > 0, `${format}: Player Movement has no header row`);
+    const cols = s.rounds.length + 3;
+    let seen = 0;
+    for (let n = head + 1; n <= mv.rowCount; n++) {
+      const row = mv.getRow(n);
+      const who = travel.find((t) => t.name === row.getCell(1).value);
+      if (!who) continue;
+      seen += 1;
+      check(
+        row.getCell(cols - 1).value === who.venueChanges && row.getCell(cols).value === who.walks,
+        `${format}: movement counts wrong for ${who.name}`
+      );
+    }
+    check(seen === players.length, `${format}: Player Movement lists ${seen} of ${players.length}`);
+    const total = mv.getRow(2).getCell(2).value;
+    check(total === travelSummary(s).drives, `${format}: venue-change total ${total}`);
+  }
 
   const bytes = (buf as ArrayBuffer).byteLength;
   console.log(

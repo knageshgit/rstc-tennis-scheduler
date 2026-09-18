@@ -11,6 +11,7 @@ import {
   courtAvg,
   courtName,
   courtSpread,
+  playerTravel,
   travelSummary,
   drawLabel,
   playerStats,
@@ -396,9 +397,100 @@ export async function buildScheduleWorkbook(
   autosize(ps);
   ps.views = [{ state: "frozen", ySplit: 1 }];
 
+  addMovementSheet(wb, s, courtNames);
+
   if (scored) addLeaderboardSheet(wb, s, sc);
 
   return wb.xlsx.writeBuffer();
+}
+
+// ---- player movement -------------------------------------------------------
+/** Two or more venue changes in a day: the rows worth re-drawing for. */
+const MOVE_FILL: ExcelJS.Fill = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFCE4B6" },
+};
+
+/**
+ * The organizer page's Player movement table, as a sheet: the day's totals,
+ * then every player's court by round with their venue changes and swaps.
+ *
+ * Sorted the same way as on screen, most venue changes first, so the players
+ * the draw moves around the club are at the top.
+ */
+function addMovementSheet(wb: ExcelJS.Workbook, s: Schedule, courtNames?: string[]) {
+  const ws = wb.addWorksheet("Player Movement");
+  const t = travelSummary(s);
+  const rows = [...playerTravel(s)].sort(
+    (a, b) =>
+      b.venueChanges - a.venueChanges || b.walks - a.walks || a.name.localeCompare(b.name)
+  );
+  const headers = [
+    "Player",
+    ...s.rounds.map((r) => `R${r.number}`),
+    "# Venue Changes",
+    "Swaps",
+  ];
+
+  const title = ws.addRow(["Player movement"]);
+  title.getCell(1).font = { bold: true, size: 14 };
+  const pct = t.transitions ? Math.round((100 * t.stays) / t.transitions) : 0;
+  const summary: [string, string | number][] = [
+    ["Venue changes, all players", t.drives],
+    ["Players who never change venue", `${t.neverDrive} of ${s.players.length}`],
+    ["Court swaps within a venue", t.walks],
+    ["Stayed on the same court", `${t.stays} of ${t.transitions} moves (${pct}%)`],
+  ];
+  for (const [label, value] of summary) {
+    const row = ws.addRow([label, value]);
+    row.getCell(1).font = { bold: true };
+    row.getCell(2).alignment = { horizontal: "left" };
+  }
+  ws.addRow([]);
+
+  const head = ws.addRow(headers);
+  const headRow = head.number;
+  head.eachCell((cell) => {
+    cell.fill = HEADER_FILL;
+    cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = BORDER;
+  });
+
+  const changesCol = headers.length - 1;
+  for (const p of rows) {
+    const row = ws.addRow([
+      p.name,
+      ...p.byRound.map((c) => (c === null ? "bye" : courtName(c, courtNames))),
+      p.venueChanges,
+      p.walks,
+    ]);
+    row.eachCell((cell, col) => {
+      cell.border = BORDER;
+      cell.alignment = { horizontal: col === 1 ? "left" : "center", vertical: "middle" };
+    });
+    if (p.venueChanges >= 2) {
+      const cell = row.getCell(changesCol);
+      cell.fill = MOVE_FILL;
+      cell.font = { bold: true };
+    }
+  }
+
+  ws.addRow([]);
+  const note = ws.addRow([
+    "A venue change is Dolphin to Shorebird, say. Swapping between two courts at " +
+      "the same venue is counted under Swaps, not as a venue change. Sitting out " +
+      "between two matches on the same court is not counted. Two or more venue " +
+      "changes is highlighted.",
+  ]);
+  ws.mergeCells(note.number, 1, note.number, headers.length);
+  note.getCell(1).font = { italic: true, color: { argb: "FF666666" } };
+  note.getCell(1).alignment = { wrapText: true, vertical: "top" };
+  note.height = 45;
+
+  autosize(ws);
+  ws.views = [{ state: "frozen", ySplit: headRow, xSplit: 1 }];
 }
 
 // ---- leaderboard -----------------------------------------------------------
