@@ -1107,7 +1107,7 @@ function LeaderboardView({
                   Games
                 </SortHeader>
                 <SortHeader col="played" sort={sort} onSort={sortBy} right>
-                  Played
+                  Matches
                 </SortHeader>
                 <SortHeader col="avg" sort={sort} onSort={sortBy} right last>
                   Avg

@@ -175,7 +175,7 @@ function leaderboardCsv(schedule: Schedule, scores: Scores): string {
     const s = String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const rows = [["Table", "Rank", "Player", "Level", "Games", "Played", "Games per match"]];
+  const rows = [["Table", "Rank", "Player", "Level", "Games", "Matches", "Games per match"]];
   for (const [table, list] of [
     ["Overall", board.all],
     ["Men", board.men],
