@@ -17,7 +17,7 @@ import {
   playerStats,
   round2,
   teamGap,
-  teamLevel,
+  teamAvg,
 } from "./scheduler";
 import {
   GAMES_PER_MATCH,
@@ -305,11 +305,11 @@ export async function buildScheduleWorkbook(
         courtName(m.court, courtNames),
         ...(showDraw ? [drawLabel(m)] : []),
         `${a1} & ${a2}`,
-        round2(teamLevel(s, m.teamA) / 2),
+        teamAvg(s, m.teamA),
         ...(scored ? [ga ?? ""] : []),
         "vs",
         `${b1} & ${b2}`,
-        round2(teamLevel(s, m.teamB) / 2),
+        teamAvg(s, m.teamB),
         ...(scored ? [gb ?? ""] : []),
         round2(courtAvg(s, m)),
         round2(courtSpread(s, m)),

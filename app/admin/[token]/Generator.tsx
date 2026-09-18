@@ -25,7 +25,7 @@ import {
   playerStats,
   round2,
   teamGap,
-  teamLevel,
+  teamAvg,
   travelSummary,
   venueOf,
 } from "@/lib/scheduler";
@@ -1069,14 +1069,14 @@ export default function Generator({
                               {schedule.players[m.teamA[0]].name} &amp; {schedule.players[m.teamA[1]].name}
                             </td>
                             <td className="px-3 py-2 text-center opacity-70">
-                              {round2(teamLevel(schedule, m.teamA) / 2)}
+                              {teamAvg(schedule, m.teamA)}
                             </td>
                             <td className="px-3 py-2 text-center opacity-40">vs</td>
                             <td className="px-3 py-2">
                               {schedule.players[m.teamB[0]].name} &amp; {schedule.players[m.teamB[1]].name}
                             </td>
                             <td className="px-3 py-2 text-center opacity-70">
-                              {round2(teamLevel(schedule, m.teamB) / 2)}
+                              {teamAvg(schedule, m.teamB)}
                             </td>
                             <td className="px-3 py-2 text-center opacity-70">
                               {round2(courtSpread(schedule, m))}

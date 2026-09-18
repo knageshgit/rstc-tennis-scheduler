@@ -952,6 +952,15 @@ export function teamLevel(s: Schedule, team: [number, number]): number {
   return s.players[team[0]].level + s.players[team[1]].level;
 }
 
+/**
+ * The level shown beside a team: the mean of the two partners' ratings, to two
+ * decimals. A 3.5 with a 4.0 is a 3.75 team. The organizer's table, the Excel
+ * Level column and the member pages all show this one number.
+ */
+export function teamAvg(s: Schedule, team: [number, number]): number {
+  return round2(teamLevel(s, team) / 2);
+}
+
 export function courtSpread(s: Schedule, m: Match): number {
   const levels = allIndices(m).map((i) => s.players[i].level);
   return Math.max(...levels) - Math.min(...levels);

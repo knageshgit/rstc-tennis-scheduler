@@ -27,6 +27,7 @@ import {
   courtName,
   drawLabel,
   playerTravel,
+  teamAvg,
   type Match,
   type Schedule,
 } from "@/lib/scheduler";
@@ -527,6 +528,8 @@ export default function EventView({
                         draw={s.format === "same" ? drawLabel(m) : ""}
                         teamA={`${s.players[m.teamA[0]].name} & ${s.players[m.teamA[1]].name}`}
                         teamB={`${s.players[m.teamB[0]].name} & ${s.players[m.teamB[1]].name}`}
+                        levelA={teamAvg(s, m.teamA)}
+                        levelB={teamAvg(s, m.teamB)}
                         games={readScore(scores, rnd.number, m.court)}
                         state={saveState[matchKey(rnd.number, m.court)]}
                         onChange={(g) => save(rnd.number, m.court, g)}
@@ -909,9 +912,19 @@ function TeamLine({
           </span>
           {k === 0 ? " & " : ""}
         </span>
-      ))}
+      ))}{" "}
+      <TeamLevel level={teamAvg(s, team as [number, number])} />
     </div>
   );
+}
+
+/**
+ * A team's level in parentheses after the names: the mean of the two
+ * partners' ratings (see `teamAvg`). Muted and never bold, so it reads as a
+ * note on the team rather than part of a winning score.
+ */
+function TeamLevel({ level }: { level: number }) {
+  return <span className="text-xs font-normal tabular-nums opacity-50">({level})</span>;
 }
 
 /** One match: two teams and the games each won, which always add up to 8. */
@@ -920,6 +933,8 @@ function MatchRow({
   draw,
   teamA,
   teamB,
+  levelA,
+  levelB,
   games,
   state,
   onChange,
@@ -928,6 +943,8 @@ function MatchRow({
   draw: string;
   teamA: string;
   teamB: string;
+  levelA: number;
+  levelB: number;
   games: number | null;
   state?: SaveState;
   onChange: (games: number | null) => void;
@@ -951,7 +968,7 @@ function MatchRow({
       </div>
       <div className="grid grid-cols-[1fr_auto] items-center gap-2">
         <span className={`text-sm ${a !== null && b !== null && a > b ? "font-semibold" : ""}`}>
-          {teamA}
+          {teamA} <TeamLevel level={levelA} />
         </span>
         <GamesPicker
           value={a}
@@ -959,7 +976,7 @@ function MatchRow({
           label={`Games won by ${teamA}`}
         />
         <span className={`text-sm ${a !== null && b !== null && b > a ? "font-semibold" : ""}`}>
-          {teamB}
+          {teamB} <TeamLevel level={levelB} />
         </span>
         <GamesPicker
           value={b}
@@ -1410,10 +1427,12 @@ function SurveyRate({
               </div>
               {/* Who was on court, so a player has something to remember the
                   round by other than its number. */}
-              {partner !== undefined && (
+              {partner !== undefined && match && (
                 <p className="mt-0.5 truncate text-xs opacity-50">
-                  with {schedule.players[partner]?.name} v{" "}
-                  {against.map((i) => schedule.players[i]?.name).join(" & ")}
+                  with {schedule.players[partner]?.name} (
+                  {teamAvg(schedule, onA ? match.teamA : match.teamB)}) v{" "}
+                  {against.map((i) => schedule.players[i]?.name).join(" & ")} (
+                  {teamAvg(schedule, onA ? match.teamB : match.teamA)})
                 </p>
               )}
               <div className="mt-2">
