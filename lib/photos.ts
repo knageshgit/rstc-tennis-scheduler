@@ -30,16 +30,6 @@ export const THUMB_EDGE = 320;
 export const MAX_FULL_BYTES = 700_000;
 export const MAX_THUMB_BYTES = 90_000;
 
-/**
- * Photos per tournament.
- *
- * A cap rather than a warning, because the store is shared: one enthusiastic
- * photographer should not be able to crowd out the next three mixers. Forty is
- * comfortably more than a club morning produces, and works out around 11MB per
- * tournament once base64 overhead is counted.
- */
-export const MAX_PHOTOS_PER_EVENT = 40;
-
 /** What a phone is allowed to send. HEIC is converted to JPEG before upload. */
 export const ALLOWED_TYPES = ["image/jpeg", "image/webp", "image/png"] as const;
 export type PhotoType = (typeof ALLOWED_TYPES)[number];
@@ -120,17 +110,12 @@ export function checkUpload(input: {
   thumbBytes: number;
   width: unknown;
   height: unknown;
-  existingCount: number;
 }): { ok: true } | { ok: false; error: string } {
   if (!isAllowedType(input.type)) {
     return { ok: false, error: "That is not an image we can store." };
   }
-  if (input.existingCount >= MAX_PHOTOS_PER_EVENT) {
-    return {
-      ok: false,
-      error: `This mixer already has ${MAX_PHOTOS_PER_EVENT} photos, which is the limit.`,
-    };
-  }
+  // No limit on how many photos a mixer keeps: the organiser archives and
+  // clears them by hand. Each one is still size-checked below.
   if (!(input.fullBytes > 0) || input.fullBytes > MAX_FULL_BYTES) {
     return { ok: false, error: "That photo is too large to store." };
   }

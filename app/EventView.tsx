@@ -3,9 +3,9 @@
 /**
  * What a club member sees: one published mixer, in tabs.
  *
- *   Schedule     who is on which court, every round
+ *   Schedule     who is on which court, a round at a time
  *   Results      the score for each match, the box to enter it, and how the
- *                round was rated
+ *                round was rated, a round at a time
  *   Leaderboard  games won, ranked, overall and by gender, sortable
  *   Survey       rate your own matches, and the day, out of five stars
  *
@@ -102,6 +102,12 @@ export default function EventView({
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [ratings, setRatings] = useState<Ratings>({});
   const [ratingState, setRatingState] = useState<Record<string, SaveState>>({});
+  /**
+   * The round on show, one for the whole page, so switching from Schedule to
+   * Results to Survey keeps you on the round you were looking at. Null until
+   * the event loads, then set once to the round in progress.
+   */
+  const [round, setRound] = useState<number | null>(null);
 
   // Scores the user has just set but which the server has not confirmed yet.
   // Polling must not yank a value back out from under someone mid-entry, so
@@ -120,6 +126,9 @@ export default function EventView({
     const ev: EventData = await res.json();
     setData(ev);
     setScores(ev.scores ?? {});
+    // Set once, on first load only. Moving it on as later scores arrive would
+    // switch rounds under someone who is reading one.
+    setRound((r) => r ?? openingRound(ev.schedule, ev.scores ?? {}));
     setLastSync(nowMs());
 
     // A second call rather than another field on the event payload. Ratings
@@ -386,9 +395,11 @@ export default function EventView({
 
   const s = data.schedule;
   const names = data.courtNames?.length ? data.courtNames : s.courtNames;
+  const roundNumbers = s.rounds.map((r) => r.number);
+  const current = s.rounds.find((r) => r.number === round) ?? s.rounds[0];
 
   return (
-    <main className="mx-auto max-w-3xl p-4 pb-24 sm:p-6">
+    <main className="mx-auto w-full max-w-3xl p-4 pb-24 sm:p-6">
       <header className="mb-4">
         <div className="flex items-center justify-between gap-3">
           {/* The badge sits to the left of the mixer name, and the pair take
@@ -453,6 +464,8 @@ export default function EventView({
           meIndex={meIndex}
           meName={meName}
           onChooseMe={chooseMe}
+          round={current.number}
+          onRound={setRound}
         />
       )}
 
@@ -480,45 +493,56 @@ export default function EventView({
             <span className="text-xs opacity-50">Remembered on this phone.</span>
           </div>
 
-          {s.rounds.map((rnd) => {
+          <RoundTabs
+            rounds={roundNumbers}
+            value={current.number}
+            onChange={setRound}
+            done={(n) => {
+              const rnd = s.rounds.find((r) => r.number === n);
+              const shown = rnd?.matches.filter(
+                (m) => courtFilter === "all" || m.court === courtFilter
+              );
+              return !!shown?.length && shown.every((m) => readScore(scores, n, m.court) !== null);
+            }}
+          />
+          {(() => {
+            const rnd = current;
             const matches = rnd.matches
               .filter((m) => courtFilter === "all" || m.court === courtFilter)
               .sort((a, b) => a.court - b.court);
-            if (!matches.length) return null;
-            const done = matches.every(
-              (m) => readScore(scores, rnd.number, m.court) !== null
-            );
             return (
-              <section key={rnd.number} className="mb-5">
-                <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                  Round {rnd.number}
-                  {done && <span className="text-emerald-600 dark:text-emerald-400">✓</span>}
-                </h2>
-                <div className="space-y-2">
-                  {matches.map((m) => (
-                    <MatchRow
-                      key={m.court}
-                      label={courtName(m.court, names)}
-                      draw={s.format === "same" ? drawLabel(m) : ""}
-                      teamA={`${s.players[m.teamA[0]].name} & ${s.players[m.teamA[1]].name}`}
-                      teamB={`${s.players[m.teamB[0]].name} & ${s.players[m.teamB[1]].name}`}
-                      games={readScore(scores, rnd.number, m.court)}
-                      state={saveState[matchKey(rnd.number, m.court)]}
-                      onChange={(g) => save(rnd.number, m.court, g)}
-                    />
-                  ))}
-                </div>
+              <section className="mb-5">
+                {matches.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-black/15 p-3 text-sm opacity-60 dark:border-white/20">
+                    No match on{" "}
+                    {courtFilter === "all" ? "any court" : courtName(courtFilter, names)} in
+                    Round {rnd.number}.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {matches.map((m) => (
+                      <MatchRow
+                        key={m.court}
+                        label={courtName(m.court, names)}
+                        draw={s.format === "same" ? drawLabel(m) : ""}
+                        teamA={`${s.players[m.teamA[0]].name} & ${s.players[m.teamA[1]].name}`}
+                        teamB={`${s.players[m.teamB[0]].name} & ${s.players[m.teamB[1]].name}`}
+                        games={readScore(scores, rnd.number, m.court)}
+                        state={saveState[matchKey(rnd.number, m.court)]}
+                        onChange={(g) => save(rnd.number, m.court, g)}
+                      />
+                    ))}
+                  </div>
+                )}
                 {/* How the round was rated, under the scores it is about.
-                    Only when somebody has rated it: an empty line on every
-                    round before anyone has opened the Survey tab would be
-                    five rows of nothing. */}
+                    Only when somebody has rated it. */}
                 {survey && <RoundRating tally={survey.rounds.find((r) => r.round === rnd.number)} />}
                 {/* Shown whatever the court filter is: filtering to one court
                     must not hide who is not on a court at all. */}
                 <Byes schedule={s} byes={rnd.byes} meIndex={meIndex} />
               </section>
             );
-          })}
+          })()}
           {survey && (
             <SurveySummary
               survey={survey}
@@ -548,6 +572,8 @@ export default function EventView({
           meName={meName}
           onChooseMe={chooseMe}
           onRate={saveRating}
+          round={current.number}
+          onRound={setRound}
         />
       )}
 
@@ -593,11 +619,88 @@ function TabButton({
   );
 }
 
+/**
+ * The round a member most likely wants on arrival: the first one with a match
+ * still unscored, which during a mixer is the one being played. Once every
+ * score is in, the day is read from the top.
+ */
+function openingRound(s: Schedule, scores: Scores): number {
+  const open = s.rounds.find((r) =>
+    r.matches.some((m) => readScore(scores, r.number, m.court) === null)
+  );
+  return (open ?? s.rounds[0])?.number ?? 1;
+}
+
+/**
+ * One tab per round, so a page shows a single round's box at a time instead of
+ * every round stacked down the screen.
+ *
+ * Underlined rather than filled, so it reads as a second level under the pill
+ * tabs at the top. Each button draws its own piece of the base line, since a
+ * shared border under a scrolling row needs a negative margin that makes the
+ * row scroll vertically too. The buttons share the width equally and never shrink below
+ * their label; a mixer with more rounds than fit scrolls sideways instead.
+ * `extra` adds one tab after the rounds (the Survey's end-of-day question),
+ * selected with the value 0, which no real round uses.
+ */
+function RoundTabs({
+  rounds,
+  value,
+  onChange,
+  done,
+  extra,
+}: {
+  rounds: number[];
+  value: number;
+  onChange: (round: number) => void;
+  /** Rounds to tick: scored on Results, rated on the Survey. */
+  done?: (round: number) => boolean;
+  extra?: { label: string; done?: boolean };
+}) {
+  const items = [
+    ...rounds.map((n) => ({ value: n, label: `Round ${n}`, done: done?.(n) ?? false })),
+    ...(extra ? [{ value: 0, label: extra.label, done: extra.done ?? false }] : []),
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Rounds"
+      className="mb-3 flex overflow-x-auto"
+    >
+      {items.map((it) => {
+        const active = it.value === value;
+        return (
+          <button
+            key={it.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(it.value)}
+            className={`min-w-fit flex-1 whitespace-nowrap border-b-2 px-1.5 py-2 text-xs font-medium transition-colors sm:px-3 sm:text-sm ${
+              active
+                ? "border-emerald-600 text-emerald-700 dark:text-emerald-400"
+                : "border-black/10 opacity-60 hover:opacity-100 dark:border-white/15"
+            }`}
+          >
+            {it.label}
+            {it.done && (
+              <span className="ml-1 text-emerald-600 dark:text-emerald-400" aria-label="done">
+                ✓
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ---- schedule --------------------------------------------------------------
 /**
- * The draw, read-only. The point of this tab is the question a member actually
- * arrives with, so picking a name puts that person's whole day in one strip at
- * the top and marks their match in every round below.
+ * The draw, read-only, one round at a time. The point of this tab is the
+ * question a member actually arrives with, so picking a name puts that
+ * person's whole day in one strip at the top, and the round below narrows to
+ * just their match. "Everyone" shows every court in the round.
  */
 function ScheduleView({
   schedule: s,
@@ -606,6 +709,8 @@ function ScheduleView({
   meIndex,
   meName,
   onChooseMe,
+  round,
+  onRound,
 }: {
   schedule: Schedule;
   names: string[];
@@ -613,6 +718,8 @@ function ScheduleView({
   meIndex: number;
   meName: string;
   onChooseMe: (name: string) => void;
+  round: number;
+  onRound: (round: number) => void;
 }) {
   const roster = useMemo(
     () =>
@@ -695,10 +802,15 @@ function ScheduleView({
             )}
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
+            {/* Each stop on the day doubles as a way to open that round. */}
             {myDay.map((d) => (
-              <span
+              <button
                 key={d.round}
+                type="button"
+                onClick={() => onRound(d.round)}
                 className={`rounded-lg px-2.5 py-1.5 text-xs ${
+                  d.round === round ? "ring-2 ring-emerald-600" : ""
+                } ${
                   d.court
                     ? "bg-white/70 dark:bg-white/10"
                     : "bg-black/5 opacity-60 dark:bg-white/5"
@@ -706,19 +818,28 @@ function ScheduleView({
               >
                 <span className="opacity-60">R{d.round}</span>{" "}
                 <span className="font-medium">{d.court ?? "sitting out"}</span>
-              </span>
+              </button>
             ))}
           </div>
         </div>
       )}
 
-      {s.rounds.map((rnd) => (
-        <section key={rnd.number} className="mb-5">
-          <h2 className="mb-2 text-sm font-semibold">Round {rnd.number}</h2>
-          <div className="space-y-2">
-            {[...rnd.matches]
-              .sort((a, b) => a.court - b.court)
-              .map((m) => {
+      <RoundTabs rounds={s.rounds.map((r) => r.number)} value={round} onChange={onRound} />
+
+      {(() => {
+        const rnd = s.rounds.find((r) => r.number === round) ?? s.rounds[0];
+        const me = meIndex >= 0;
+        // A chosen player sees only their own match; everyone else sees the
+        // whole round. A player sitting this round out has no match, so the
+        // sitting-out block below is their answer.
+        const matches = [...rnd.matches]
+          .filter((m) => !me || isMine(m))
+          .sort((a, b) => a.court - b.court);
+        const sittingOut = me && rnd.byes.includes(meIndex);
+        return (
+          <section className="mb-5">
+            <div className="space-y-2">
+              {matches.map((m) => {
                 const games = readScore(scores, rnd.number, m.court);
                 const mine = isMine(m);
                 return (
@@ -759,10 +880,11 @@ function ScheduleView({
                   </div>
                 );
               })}
-          </div>
-          <Byes schedule={s} byes={rnd.byes} meIndex={meIndex} />
-        </section>
-      ))}
+            </div>
+            {(!me || sittingOut) && <Byes schedule={s} byes={rnd.byes} meIndex={meIndex} />}
+          </section>
+        );
+      })()}
     </section>
   );
 }
@@ -1162,6 +1284,8 @@ function SurveyRate({
   meName,
   onChooseMe,
   onRate,
+  round,
+  onRound,
 }: {
   schedule: Schedule;
   names: string[];
@@ -1173,7 +1297,14 @@ function SurveyRate({
   meName: string;
   onChooseMe: (name: string) => void;
   onRate: (player: number, stars: number | null, at?: { round: number; court: number }) => void;
+  round: number;
+  onRound: (round: number) => void;
 }) {
+  // The end-of-day question is its own tab after the rounds. Kept here rather
+  // than in the page-wide round, which the Schedule and Results tabs share and
+  // which has no "overall" to show.
+  const [overallOpen, setOverallOpen] = useState(false);
+
   if (meIndex < 0) {
     return (
       <section>
@@ -1227,14 +1358,38 @@ function SurveyRate({
       </div>
 
       <p className="mb-4 text-xs opacity-60">
-        {rated} of {total} match{total === 1 ? "" : "es"} rated. Tap a star to rate,
-        tap it again to undo. Ratings are anonymous and save as you go, and once
+        {rated} of {total} match{total === 1 ? "" : "es"} rated. Pick a round, tap a
+        star to rate, tap it again to undo. The last tab is the day as a whole. Ratings are anonymous and save as you go, and once
         you have rated a round you will see how everyone else found it, updating
         as they answer.
       </p>
 
-      <div className="space-y-3">
-        {mine.map(({ round, court }) => {
+      <RoundTabs
+        rounds={schedule.rounds.map((r) => r.number)}
+        value={overallOpen ? 0 : round}
+        onChange={(n) => {
+          setOverallOpen(n === 0);
+          if (n !== 0) onRound(n);
+        }}
+        done={(n) =>
+          mine.some(
+            (m) => m.round === n && ratings[ratingKey(n, m.court, meIndex)] !== undefined
+          )
+        }
+        extra={{ label: "Overall", done: overall !== null }}
+      />
+
+      {!overallOpen &&
+        (() => {
+          const slot = mine.find((m) => m.round === round);
+          if (!slot) {
+            return (
+              <p className="rounded-xl border border-dashed border-black/15 p-3 text-sm opacity-60 dark:border-white/20">
+                You sat out Round {round}, so there is nothing to rate here.
+              </p>
+            );
+          }
+          const { court } = slot;
           const key = ratingKey(round, court, meIndex);
           const match = schedule.rounds
             .find((r) => r.number === round)
@@ -1248,16 +1403,13 @@ function SurveyRate({
             : undefined;
           const against = match ? (onA ? match.teamB : match.teamA) : [];
           return (
-            <div
-              key={key}
-              className="rounded-xl border border-black/10 p-3 dark:border-white/15"
-            >
+            <div className="rounded-xl border border-black/10 p-3 dark:border-white/15">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm font-semibold">Round {round}</span>
                 <span className="text-xs opacity-60">{courtName(court, names)}</span>
               </div>
-              {/* Who was on court, so a player picking a round out of five has
-                  something to remember it by other than its number. */}
+              {/* Who was on court, so a player has something to remember the
+                  round by other than its number. */}
               {partner !== undefined && (
                 <p className="mt-0.5 truncate text-xs opacity-50">
                   with {schedule.players[partner]?.name} v{" "}
@@ -1283,31 +1435,32 @@ function SurveyRate({
               />
             </div>
           );
-        })}
-      </div>
+        })()}
 
       {/* The tournament as a whole, which is a different question from the
           mean of the matches: a day can be more or less than its tennis. */}
-      <div className="mt-6 rounded-xl border border-emerald-600/30 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
-        <h3 className="text-sm font-semibold">The tournament overall</h3>
-        <p className="mt-0.5 text-xs opacity-60">
-          Everything together: the draw, the organisation, the morning.
-        </p>
-        <div className="mt-2">
-          <StarPicker
-            label="The tournament overall"
-            value={overall}
-            state={saveState[overallKey(meIndex)]}
-            onChange={(v) => onRate(meIndex, v)}
+      {overallOpen && (
+        <div className="rounded-xl border border-emerald-600/30 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
+          <h3 className="text-sm font-semibold">The tournament overall</h3>
+          <p className="mt-0.5 text-xs opacity-60">
+            Everything together: the draw, the organisation, the morning.
+          </p>
+          <div className="mt-2">
+            <StarPicker
+              label="The tournament overall"
+              value={overall}
+              state={saveState[overallKey(meIndex)]}
+              onChange={(v) => onRate(meIndex, v)}
+            />
+          </div>
+          <RoundSoFar
+            round={0}
+            tally={survey?.overall}
+            revealed={overall !== null}
+            label="Everyone so far"
           />
         </div>
-        <RoundSoFar
-          round={0}
-          tally={survey?.overall}
-          revealed={overall !== null}
-          label="Everyone so far"
-        />
-      </div>
+      )}
     </section>
   );
 }
@@ -1326,9 +1479,9 @@ function RoundRating({ tally }: { tally?: Tally }) {
 /**
  * The survey at the foot of the Results tab: the two headline numbers.
  *
- * Kept to the two means and their counts. The per-round detail is already up
- * the page against the round it describes, and a second copy of it here would
- * be a table nobody reads.
+ * Kept to the two means and their counts. The per-round detail sits under
+ * each round's tab, and a second copy of it here would be a table nobody
+ * reads.
  */
 function SurveySummary({
   survey,
@@ -1452,8 +1605,9 @@ function RoundSoFar({
 /**
  * The Survey tab: two panes, rating and reading.
  *
- * Rate is one player's own four cards. Everyone is the whole club's answer,
- * round by round and court by court. They are the same data from opposite
+ * Player's is one player's own card for each round, a round at a time, plus
+ * the day overall. Everyone is the whole club's answer, round by round and
+ * court by court. They are the same data from opposite
  * ends, which is why they are sub-tabs of one tab rather than two tabs in the
  * top bar: the top bar answers "what do you want to do", and both of these are
  * the survey.
@@ -1474,9 +1628,11 @@ function SurveyView(props: {
   meName: string;
   onChooseMe: (name: string) => void;
   onRate: (player: number, stars: number | null, at?: { round: number; court: number }) => void;
+  round: number;
+  onRound: (round: number) => void;
 }) {
   const [pane, setPane] = useState<"rate" | "all">("rate");
-  const { survey, schedule, names } = props;
+  const { survey, schedule, names, round, onRound } = props;
   const answers = survey ? survey.matches.count + survey.overall.count : 0;
 
   return (
@@ -1492,7 +1648,7 @@ function SurveyView(props: {
                 : "opacity-60 hover:opacity-100"
             }`}
           >
-            {k === "rate" ? "Rate" : "Everyone"}
+            {k === "rate" ? "Player's" : "Everyone"}
             {/* The count is the reason to look, so it goes on the tab. */}
             {k === "all" && answers > 0 && (
               <span className="ml-1.5 text-xs opacity-60">{answers}</span>
@@ -1504,7 +1660,13 @@ function SurveyView(props: {
       {pane === "rate" ? (
         <SurveyRate {...props} />
       ) : (
-        <SurveyResults survey={survey} schedule={schedule} names={names} />
+        <SurveyResults
+          survey={survey}
+          schedule={schedule}
+          names={names}
+          round={round}
+          onRound={onRound}
+        />
       )}
     </section>
   );
@@ -1523,10 +1685,14 @@ function SurveyResults({
   survey,
   schedule,
   names,
+  round,
+  onRound,
 }: {
   survey: ReturnType<typeof summarizeSurvey> | null;
   schedule: Schedule;
   names: string[];
+  round: number;
+  onRound: (round: number) => void;
 }) {
   if (!survey || (survey.matches.count === 0 && survey.overall.count === 0)) {
     return (
@@ -1565,8 +1731,13 @@ function SurveyResults({
       </p>
 
       <h3 className="mt-6 mb-2 text-sm font-semibold">Round by round</h3>
+      <RoundTabs
+        rounds={survey.rounds.map((r) => r.round)}
+        value={round}
+        onChange={onRound}
+      />
       <div className="space-y-2">
-        {survey.rounds.map((r) => (
+        {survey.rounds.filter((r) => r.round === round).map((r) => (
           <div
             key={r.round}
             className="rounded-xl border border-black/10 p-3 dark:border-white/15"

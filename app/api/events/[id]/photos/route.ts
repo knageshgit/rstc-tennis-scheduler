@@ -15,7 +15,6 @@
  */
 import { isAdminRequest } from "@/lib/admin";
 import {
-  MAX_PHOTOS_PER_EVENT,
   checkUpload,
   isValidPhotoId,
   newPhotoId,
@@ -93,25 +92,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     return Response.json({ error: "That image was not encoded correctly." }, { status: 400 });
   }
 
-  // Photos already stored decides whether there is room, so it is read before
-  // anything is written rather than trusted from the client.
-  let existing: PhotoMeta[];
-  try {
-    existing = await listPhotos(code);
-  } catch (err) {
-    if (err instanceof StoreUnavailableError) {
-      return Response.json({ error: err.message }, { status: 503 });
-    }
-    throw err;
-  }
-
   const verdict = checkUpload({
     type,
     fullBytes: decodedBytes(full),
     thumbBytes: decodedBytes(thumb),
     width,
     height,
-    existingCount: existing.length,
   });
   if (!verdict.ok) return Response.json({ error: verdict.error }, { status: 400 });
 
@@ -144,7 +130,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   }
 
   return Response.json(
-    { photo: meta, remaining: MAX_PHOTOS_PER_EVENT - existing.length - 1 },
+    { photo: meta },
     { status: 201, ...noStore }
   );
 }

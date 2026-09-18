@@ -20,7 +20,7 @@ import {
   travelSummary,
   type Schedule,
 } from "@/lib/scheduler";
-import { MAX_PHOTOS_PER_EVENT, fmtBytes, type PhotoMeta } from "@/lib/photos";
+import { fmtBytes, type PhotoMeta } from "@/lib/photos";
 
 interface Loaded {
   code: string;
@@ -192,7 +192,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
           {data?.event && (
             <p className="text-xs opacity-60">
               {data.event.title || "untitled"} · {data.event.schedule.players.length} players ·{" "}
-              {data.photos.length}/{MAX_PHOTOS_PER_EVENT} photos ({fmtBytes(photoBytes)}) ·{" "}
+              {data.photos.length} photos ({fmtBytes(photoBytes)}) ·{" "}
               {data.messages.length} messages
             </p>
           )}

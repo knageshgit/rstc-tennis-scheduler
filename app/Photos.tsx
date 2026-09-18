@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { preparePhoto } from "@/lib/photo-capture";
-import { MAX_PHOTOS_PER_EVENT, type PhotoMeta } from "@/lib/photos";
+import type { PhotoMeta } from "@/lib/photos";
 
 interface Queued {
   key: string;
@@ -118,21 +118,18 @@ export default function Photos({
   }
 
   const count = photos?.length ?? 0;
-  const full = count >= MAX_PHOTOS_PER_EVENT;
 
   return (
     <section>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <button
           onClick={() => cameraInput.current?.click()}
-          disabled={full}
           className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-40 dark:bg-blue-600 dark:hover:bg-blue-500"
         >
           📷 Take a photo
         </button>
         <button
           onClick={() => libraryInput.current?.click()}
-          disabled={full}
           className="inline-flex items-center gap-2 rounded-xl border border-blue-600/40 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-600 hover:text-white disabled:opacity-40 dark:border-blue-400/40 dark:text-blue-300 dark:hover:bg-blue-600 dark:hover:text-white"
         >
           🖼️ Upload
@@ -159,9 +156,8 @@ export default function Photos({
           className="hidden"
         />
         <p className="w-full text-xs opacity-60 sm:w-auto">
-          {full
-            ? `This mixer has reached its limit of ${MAX_PHOTOS_PER_EVENT} photos.`
-            : `Take one now, or add pictures you already have. Everyone with this link can see them. ${count} of ${MAX_PHOTOS_PER_EVENT} used.`}
+          Take one now, or add pictures you already have. Everyone with this link
+          can see them.{count > 0 && ` ${count} so far.`}
         </p>
       </div>
 

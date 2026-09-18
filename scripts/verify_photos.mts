@@ -13,7 +13,6 @@
  */
 import {
   MAX_FULL_BYTES,
-  MAX_PHOTOS_PER_EVENT,
   MAX_THUMB_BYTES,
   checkUpload,
   fitWithin,
@@ -100,7 +99,6 @@ const good = {
   thumbBytes: 20_000,
   width: 1200,
   height: 900,
-  existingCount: 0,
 };
 check("a normal photo is accepted", checkUpload(good).ok);
 check("an oversized image is refused", !checkUpload({ ...good, fullBytes: MAX_FULL_BYTES + 1 }).ok);
@@ -110,23 +108,9 @@ check(
   !checkUpload({ ...good, thumbBytes: MAX_THUMB_BYTES + 1 }).ok
 );
 check("an SVG is refused", !checkUpload({ ...good, type: "image/svg+xml" }).ok);
-check(
-  "the event's last slot is still allowed",
-  checkUpload({ ...good, existingCount: MAX_PHOTOS_PER_EVENT - 1 }).ok
-);
-check(
-  "one past the limit is refused",
-  !checkUpload({ ...good, existingCount: MAX_PHOTOS_PER_EVENT }).ok
-);
 check("absurd dimensions are refused", !checkUpload({ ...good, width: 99999 }).ok);
 check("fractional dimensions are refused", !checkUpload({ ...good, width: 12.5 }).ok);
 check("negative dimensions are refused", !checkUpload({ ...good, height: -10 }).ok);
-const refusal = checkUpload({ ...good, existingCount: MAX_PHOTOS_PER_EVENT });
-check(
-  "a refusal explains itself in a sentence worth showing",
-  !refusal.ok && /limit/i.test(refusal.error),
-  !refusal.ok ? refusal.error : ""
-);
 
 // ---- metadata --------------------------------------------------------------
 const meta = (over: Partial<PhotoMeta> = {}): PhotoMeta => ({
