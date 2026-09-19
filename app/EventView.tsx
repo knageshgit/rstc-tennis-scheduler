@@ -80,18 +80,18 @@ const COURT_FILTER_KEY = "tennis-scorer-court";
 const ME_KEY = "tennis-scorer-me";
 
 /**
- * "Saturday, Sep. 19" from "2026-09-19". The month takes a period only when
- * it is actually shortened, so May stays "May". Parsed and printed as UTC: the
- * string is a calendar day with no timezone, and shifting it would show the
- * day before to anyone west of London.
+ * "Saturday, Sep. 19" from "2026-09-19", or "Sat, Sep. 19" with `weekday`
+ * "short". The month takes a period only when it is actually shortened, so May
+ * stays "May". Parsed and printed as UTC: the string is a calendar day with no
+ * timezone, and shifting it would show the day before to anyone west of London.
  */
-function playDay(iso: string): string {
+function playDay(iso: string, weekday: "long" | "short" = "long"): string {
   const d = new Date(`${iso}T00:00:00Z`);
   const part = (o: Intl.DateTimeFormatOptions) =>
     d.toLocaleDateString("en-US", { ...o, timeZone: "UTC" });
   const short = part({ month: "short" });
   const month = short === part({ month: "long" }) ? short : `${short}.`;
-  return `${part({ weekday: "long" })}, ${month} ${d.getUTCDate()}`;
+  return `${part({ weekday })}, ${month} ${d.getUTCDate()}`;
 }
 
 /** Wall-clock read, kept out of the component so it stays free of impure calls. */
@@ -439,7 +439,9 @@ export default function EventView({
                 <span className="truncate">{data.title || "Tennis mixer"}</span>
                 {data.date && (
                   <span className="shrink-0 text-sm font-normal opacity-60">
-                    · {playDay(data.date)}
+                    {/* Short weekday on a phone, so the name gets the room. */}
+                    · <span className="sm:hidden">{playDay(data.date, "short")}</span>
+                    <span className="hidden sm:inline">{playDay(data.date)}</span>
                   </span>
                 )}
               </h1>
