@@ -80,17 +80,18 @@ const COURT_FILTER_KEY = "tennis-scorer-court";
 const ME_KEY = "tennis-scorer-me";
 
 /**
- * "Sat, Sep 20" from "2026-09-20". Parsed and printed as UTC: the string is a
- * calendar day with no timezone, and shifting it would show the day before to
- * anyone west of London.
+ * "Saturday, Sep. 19" from "2026-09-19". The month takes a period only when
+ * it is actually shortened, so May stays "May". Parsed and printed as UTC: the
+ * string is a calendar day with no timezone, and shifting it would show the
+ * day before to anyone west of London.
  */
 function playDay(iso: string): string {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+  const d = new Date(`${iso}T00:00:00Z`);
+  const part = (o: Intl.DateTimeFormatOptions) =>
+    d.toLocaleDateString("en-US", { ...o, timeZone: "UTC" });
+  const short = part({ month: "short" });
+  const month = short === part({ month: "long" }) ? short : `${short}.`;
+  return `${part({ weekday: "long" })}, ${month} ${d.getUTCDate()}`;
 }
 
 /** Wall-clock read, kept out of the component so it stays free of impure calls. */
