@@ -803,32 +803,33 @@ export default function Generator({
           </div>
 
           <div className="mb-5">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="opacity-70">Tournament name</span>
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                maxLength={120}
-                placeholder="Saturday Mixer, 19 September"
-                className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
-              />
-            </label>
+            {/* Name and date side by side; they stack on a narrow phone. The
+                date box is the device's own calendar picker. */}
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex min-w-0 max-w-md flex-1 basis-64 flex-col gap-1 text-sm">
+                <span className="opacity-70">Tournament name</span>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  maxLength={120}
+                  placeholder="Autumn Classic"
+                  className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="opacity-70">Date played</span>
+                <input
+                  type="date"
+                  value={playDate}
+                  onChange={(e) => setPlayDate(e.target.value)}
+                  className="w-44 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+                />
+              </label>
+            </div>
             <p className="mt-1 text-xs opacity-60">
-              Shown at the top of the members&apos; page and on the results archive.
-              Leave it empty and it reads &ldquo;Tennis mixer&rdquo;.
-            </p>
-            <label className="mt-3 flex flex-col gap-1 text-sm">
-              <span className="opacity-70">Date played</span>
-              <input
-                type="date"
-                value={playDate}
-                onChange={(e) => setPlayDate(e.target.value)}
-                className="w-44 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
-              />
-            </label>
-            <p className="mt-1 text-xs opacity-60">
-              Shown after the name on the members&apos; page. Change it if you are
-              publishing ahead of the day.
+              Both show at the top of the members&apos; page, as &ldquo;Autumn Classic ·
+              Saturday, Oct. 3&rdquo;. The date starts as today; pick the day it is
+              played. Leave the name empty and it reads &ldquo;Tennis mixer&rdquo;.
             </p>
           </div>
 

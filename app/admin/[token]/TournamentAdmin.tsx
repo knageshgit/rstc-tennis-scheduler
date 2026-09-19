@@ -215,31 +215,33 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
 
         {data?.event && (
           <div className="mt-4 rounded-lg border border-black/10 p-3 dark:border-white/15">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="opacity-70">Tournament name</span>
-              <input
-                value={title}
-                onChange={(e) => {
-                  setTitle(e.target.value);
-                  setRenamedCode(null);
-                }}
-                maxLength={120}
-                placeholder="Tennis mixer"
-                className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
-              />
-            </label>
-            <label className="mt-3 flex flex-col gap-1 text-sm">
-              <span className="opacity-70">Date played</span>
-              <input
-                type="date"
-                value={playDate}
-                onChange={(e) => {
-                  setPlayDate(e.target.value);
-                  setRenamedCode(null);
-                }}
-                className="w-44 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
-              />
-            </label>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex min-w-0 max-w-md flex-1 basis-64 flex-col gap-1 text-sm">
+                <span className="opacity-70">Tournament name</span>
+                <input
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    setRenamedCode(null);
+                  }}
+                  maxLength={120}
+                  placeholder="Tennis mixer"
+                  className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="opacity-70">Date played</span>
+                <input
+                  type="date"
+                  value={playDate}
+                  onChange={(e) => {
+                    setPlayDate(e.target.value);
+                    setRenamedCode(null);
+                  }}
+                  className="w-44 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+                />
+              </label>
+            </div>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <button
                 onClick={rename}
