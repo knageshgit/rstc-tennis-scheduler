@@ -49,6 +49,8 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
   const [version, setVersion] = useState(0);
   /** The name box, seeded from whatever the event is currently called. */
   const [title, setTitle] = useState("");
+  /** The play date box, seeded from the event; "" when none is set. */
+  const [playDate, setPlayDate] = useState("");
   /**
    * Which tournament the "Saved" line belongs to, or null for none showing.
    *
@@ -83,6 +85,7 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
       if (cancelled) return;
       const event = ev && ev.id && ev.schedule ? (ev as BundleEvent) : null;
       setTitle(event?.title ?? "");
+      setPlayDate(event?.date ?? "");
       setLoaded({
         code: clean,
         event,
@@ -115,7 +118,8 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
       const res = await fetch("/api/admin/rename", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: data.code, title: title.trim() }),
+        // The date goes too: "" clears it, which is a real choice.
+        body: JSON.stringify({ id: data.code, title: title.trim(), date: playDate }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || "Could not rename that event.");
@@ -224,13 +228,29 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
                 className="w-full max-w-md rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
               />
             </label>
+            <label className="mt-3 flex flex-col gap-1 text-sm">
+              <span className="opacity-70">Date played</span>
+              <input
+                type="date"
+                value={playDate}
+                onChange={(e) => {
+                  setPlayDate(e.target.value);
+                  setRenamedCode(null);
+                }}
+                className="w-44 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+              />
+            </label>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <button
                 onClick={rename}
-                disabled={busy !== "" || title.trim() === (data.event.title ?? "").trim()}
+                disabled={
+                  busy !== "" ||
+                  (title.trim() === (data.event.title ?? "").trim() &&
+                    playDate === (data.event.date ?? ""))
+                }
                 className="rounded-lg bg-black/80 px-3 py-1.5 text-sm font-medium text-white hover:bg-black disabled:opacity-40 dark:bg-white/85 dark:text-black dark:hover:bg-white"
               >
-                {busy === "rename" ? "Saving…" : "Rename"}
+                {busy === "rename" ? "Saving…" : "Save name and date"}
               </button>
               {renamedCode === data.code && (
                 <span className="text-xs text-emerald-700 dark:text-emerald-400">
@@ -239,8 +259,9 @@ export default function TournamentAdmin({ liveId }: { liveId: string | null }) {
               )}
             </div>
             <p className="mt-2 text-xs opacity-50">
-              Changes the name only. The draw, the scores, the code and everything
-              members have posted stay exactly as they are.
+              Changes the name and date only. The draw, the scores, the code and
+              everything members have posted stay exactly as they are. The date
+              shows after the name on the members&apos; page.
             </p>
           </div>
         )}

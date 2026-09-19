@@ -16,6 +16,7 @@ import { matchKey, type Scores } from "../lib/scoring";
 import {
   CURRENT_KEY,
   createEvent,
+  updateEventDetails,
   eventKey,
   getCurrentEventId,
   getEvent,
@@ -239,6 +240,22 @@ check("a published event reads back", back !== null);
 eq("the schedule survives storage unchanged", back?.schedule, JSON.parse(JSON.stringify(real)));
 eq("the title survives storage", back?.title, "Trial");
 eq("the court names survive storage", back?.courtNames, ["Shorebird 1", "Dolphin 1"]);
+
+// ---- the play date ----------------------------------------------------------
+check("an event published without a date has none", back?.date === undefined);
+const dated = await createEvent("Dated", [], real, "2026-09-20");
+eq("a play date survives publishing", (await getEvent(dated.id))?.date, "2026-09-20");
+const junkDate = await createEvent("Junk date", [], real, "20/09/2026");
+check("a malformed play date is dropped", (await getEvent(junkDate.id))?.date === undefined);
+const ttlBefore = redis.ttl.get(eventKey(ev.id));
+await updateEventDetails(ev.id, { date: "2026-09-27" });
+eq("a date can be added to a published event", (await getEvent(ev.id))?.date, "2026-09-27");
+eq("adding a date keeps the name", (await getEvent(ev.id))?.title, "Trial");
+eq("adding a date keeps the expiry", redis.ttl.get(eventKey(ev.id)), ttlBefore);
+await updateEventDetails(ev.id, { date: null });
+check("a date can be cleared", (await getEvent(ev.id))?.date === undefined);
+await updateEventDetails(ev.id, { date: "not a date" });
+check("an invalid date is ignored, not stored", (await getEvent(ev.id))?.date === undefined);
 
 const other = await createEvent("Second", [], real);
 check("two events get different codes", other.id !== ev.id);

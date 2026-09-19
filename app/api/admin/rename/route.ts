@@ -8,16 +8,17 @@
  * a fresh code and a fresh draw, and the draw is exactly what must not move
  * once people have read it.
  *
- * So this changes the one field, on an event that already exists, and touches
- * nothing else. Organizers only: the name is what every member sees at the top
- * of the page.
+ * So this changes the name, and the day it is played, on an event that already
+ * exists, and touches nothing else. Organizers only: both are what every member
+ * sees at the top of the page.
  */
 import { isAdminRequest } from "@/lib/admin";
+import { isValidDate } from "@/lib/archive";
 import {
   isStoreConfigured,
   isValidEventId,
   normalizeEventId,
-  renameEvent,
+  updateEventDetails,
 } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
   }
-  const { id, title } = (body ?? {}) as { id?: unknown; title?: unknown };
+  const { id, title, date } = (body ?? {}) as { id?: unknown; title?: unknown; date?: unknown };
 
   if (typeof id !== "string") {
     return Response.json({ error: "Which event?" }, { status: 400 });
@@ -52,24 +53,33 @@ export async function POST(request: Request) {
   if (!isValidEventId(code)) {
     return Response.json({ error: "That is not a valid event code." }, { status: 400 });
   }
-  if (typeof title !== "string") {
+  if (title !== undefined && typeof title !== "string") {
     return Response.json({ error: "What should it be called?" }, { status: 400 });
   }
-  // An empty name is allowed and means "no name": the member page already
-  // falls back to "Tennis mixer", which reads better than a filename.
-  const clean = title.slice(0, MAX_TITLE).trim();
+  // The play date: YYYY-MM-DD to set it, "" to clear it, absent to leave it.
+  if (date !== undefined && (typeof date !== "string" || (date !== "" && !isValidDate(date)))) {
+    return Response.json({ error: "That is not a valid date." }, { status: 400 });
+  }
+  if (title === undefined && date === undefined) {
+    return Response.json({ error: "Nothing to change." }, { status: 400 });
+  }
 
   try {
-    const ev = await renameEvent(code, clean);
+    const ev = await updateEventDetails(code, {
+      // An empty name is allowed and means "no name": the member page already
+      // falls back to "Tennis mixer", which reads better than a filename.
+      ...(typeof title === "string" ? { title: title.slice(0, MAX_TITLE).trim() } : {}),
+      ...(typeof date === "string" ? { date: date === "" ? null : date } : {}),
+    });
     if (!ev) {
       return Response.json({ error: "No event with that code." }, { status: 404 });
     }
     return Response.json(
-      { ok: true, id: code, title: ev.title },
+      { ok: true, id: code, title: ev.title, date: ev.date ?? null },
       { headers: { "cache-control": "no-store" } }
     );
   } catch (err) {
-    console.error("renameEvent failed", err);
+    console.error("updateEventDetails failed", err);
     return Response.json({ error: "Could not rename that event." }, { status: 500 });
   }
 }

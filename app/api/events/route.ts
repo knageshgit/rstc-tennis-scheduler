@@ -40,10 +40,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
   }
 
-  const { schedule, courtNames, title } = (body ?? {}) as {
+  const { schedule, courtNames, title, date } = (body ?? {}) as {
     schedule?: unknown;
     courtNames?: unknown;
     title?: unknown;
+    date?: unknown;
   };
 
   if (!isValidScheduleShape(schedule)) {
@@ -58,7 +59,9 @@ export async function POST(request: Request) {
     const ev = await createEvent(
       typeof title === "string" ? title.slice(0, 120).trim() : "",
       names,
-      schedule
+      schedule,
+      // The day it is played; createEvent drops anything not YYYY-MM-DD.
+      typeof date === "string" ? date : undefined
     );
     // Publishing is also the moment the club link starts pointing here, so the
     // organizer never has to hand out a new URL. If this write fails the event

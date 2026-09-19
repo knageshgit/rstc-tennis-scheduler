@@ -105,6 +105,14 @@ export default function Generator({
    * therefore nobody noticed was wrong. An empty box asks the question.
    */
   const [title, setTitle] = useState("");
+  /**
+   * The day it will be played. Today in the organizer's own timezone, since
+   * a schedule is usually published on the day; change it when publishing the
+   * evening before.
+   */
+  const [playDate, setPlayDate] = useState(() =>
+    new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  );
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [usedCourtNames, setUsedCourtNames] = useState<string[]>([...DEFAULT_COURT_NAMES]);
   const [error, setError] = useState<string>("");
@@ -332,6 +340,7 @@ export default function Generator({
           // a real answer: the members' page falls back to "Tennis mixer",
           // which is better than the name of a spreadsheet.
           title: title.trim(),
+          date: playDate,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -807,6 +816,19 @@ export default function Generator({
             <p className="mt-1 text-xs opacity-60">
               Shown at the top of the members&apos; page and on the results archive.
               Leave it empty and it reads &ldquo;Tennis mixer&rdquo;.
+            </p>
+            <label className="mt-3 flex flex-col gap-1 text-sm">
+              <span className="opacity-70">Date played</span>
+              <input
+                type="date"
+                value={playDate}
+                onChange={(e) => setPlayDate(e.target.value)}
+                className="w-44 rounded-lg border border-black/15 bg-transparent px-3 py-2 dark:border-white/20"
+              />
+            </label>
+            <p className="mt-1 text-xs opacity-60">
+              Shown after the name on the members&apos; page. Change it if you are
+              publishing ahead of the day.
             </p>
           </div>
 

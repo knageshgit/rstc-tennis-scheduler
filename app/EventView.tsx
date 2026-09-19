@@ -62,6 +62,8 @@ interface EventData {
   id: string;
   title: string;
   createdAt: number;
+  /** The day it is played, `YYYY-MM-DD`, once the organizer has set it. */
+  date?: string;
   courtNames: string[];
   schedule: Schedule;
   scores: Scores;
@@ -76,6 +78,20 @@ const POLL_MS = 10_000;
 const COURT_FILTER_KEY = "tennis-scorer-court";
 /** Remembered by name, not index: next week's schedule renumbers everybody. */
 const ME_KEY = "tennis-scorer-me";
+
+/**
+ * "Sat, Sep 20" from "2026-09-20". Parsed and printed as UTC: the string is a
+ * calendar day with no timezone, and shifting it would show the day before to
+ * anyone west of London.
+ */
+function playDay(iso: string): string {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
 
 /** Wall-clock read, kept out of the component so it stays free of impure calls. */
 function nowMs(): number {
@@ -417,8 +433,14 @@ export default function EventView({
               <p className="text-xl font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">
                 MatchPoint
               </p>
-              <h1 className="mt-1 truncate text-base font-semibold leading-tight text-black dark:text-white">
-                {data.title || "Tennis mixer"}
+              {/* The name truncates on a narrow phone; the date never does. */}
+              <h1 className="mt-1 flex min-w-0 items-baseline gap-1.5 text-base font-semibold leading-tight text-black dark:text-white">
+                <span className="truncate">{data.title || "Tennis mixer"}</span>
+                {data.date && (
+                  <span className="shrink-0 text-sm font-normal opacity-60">
+                    · {playDay(data.date)}
+                  </span>
+                )}
               </h1>
             </div>
           </div>

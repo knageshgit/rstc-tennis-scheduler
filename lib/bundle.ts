@@ -32,6 +32,8 @@ export interface BundleEvent {
   id: string;
   title: string;
   createdAt: number;
+  /** The day it is played, `YYYY-MM-DD`, when the organizer has set one. */
+  date?: string;
   courtNames: string[];
   schedule: Schedule;
 }

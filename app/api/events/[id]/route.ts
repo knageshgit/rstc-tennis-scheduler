@@ -31,6 +31,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
         id: ev.id,
         title: ev.title,
         createdAt: ev.createdAt,
+        ...(ev.date ? { date: ev.date } : {}),
         courtNames: ev.courtNames,
         schedule: ev.schedule,
         scores,

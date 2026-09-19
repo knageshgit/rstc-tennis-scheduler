@@ -45,6 +45,7 @@ import {
 } from "./photos";
 import {
   isArchiveEntry,
+  isValidDate,
   sortArchive,
   summarize,
   type ArchiveEntry,
@@ -68,6 +69,14 @@ export interface StoredEvent {
   id: string;
   createdAt: number;
   title: string;
+  /**
+   * The day the mixer is played, `YYYY-MM-DD`, shown after its name.
+   *
+   * Set by the organizer, not taken from `createdAt`: a schedule is often
+   * published days before it is played. Absent on events published before
+   * this field existed, until the organizer sets it.
+   */
+  date?: string;
   courtNames: string[];
   schedule: Schedule;
 }
@@ -231,7 +240,8 @@ export function isValidScheduleShape(s: unknown): s is Schedule {
 export async function createEvent(
   title: string,
   courtNames: string[],
-  schedule: Schedule
+  schedule: Schedule,
+  date?: string
 ): Promise<StoredEvent> {
   const redis = db();
   // `nx` means "only if this key is free", so a code that happens to collide
@@ -241,6 +251,7 @@ export async function createEvent(
       id: newEventId(),
       createdAt: Date.now(),
       title,
+      ...(isValidDate(date) ? { date } : {}),
       courtNames,
       schedule,
     };
@@ -279,9 +290,23 @@ export async function getEvent(id: string): Promise<StoredEvent | null> {
  * results page.
  */
 export async function renameEvent(id: string, title: string): Promise<StoredEvent | null> {
+  return updateEventDetails(id, { title });
+}
+
+/**
+ * Change an event's name and/or play date, and nothing else, keeping its TTL
+ * (see `renameEvent`). A `date` of null removes it; an invalid one is ignored.
+ */
+export async function updateEventDetails(
+  id: string,
+  patch: { title?: string; date?: string | null }
+): Promise<StoredEvent | null> {
   const ev = await getEvent(id);
   if (!ev) return null;
-  const updated: StoredEvent = { ...ev, title };
+  const updated: StoredEvent = { ...ev };
+  if (patch.title !== undefined) updated.title = patch.title;
+  if (patch.date === null) delete updated.date;
+  else if (isValidDate(patch.date)) updated.date = patch.date;
   await db().set(eventKey(id), updated, { keepTtl: true });
   return updated;
 }
