@@ -410,10 +410,11 @@ export default function EventView({
               mixer name truncate rather than shove the code off the screen. */}
           <div className="flex min-w-0 items-center gap-2.5">
             <Logo />
-            {/* The app's name leads: large, bold and blue, with the day's
-                mixer under it in plain black (white on a dark phone). */}
+            {/* The app's name leads, bold and blue, with the day's mixer under
+                it in plain black (white on a dark phone). Sized so the pair is
+                no taller than the badge beside it. */}
             <div className="min-w-0">
-              <p className="text-2xl font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">
+              <p className="text-xl font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">
                 MatchPoint
               </p>
               <h1 className="mt-1 truncate text-base font-semibold leading-tight text-black dark:text-white">

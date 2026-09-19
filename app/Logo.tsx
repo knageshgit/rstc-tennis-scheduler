@@ -1,37 +1,54 @@
 /**
- * The club badge.
+ * The club badge: "RSTC" set above the emblem, exactly as wide as it.
  *
- * Two files, not one, because the wordmark is set in pure black and would
- * disappear against the dark background the app takes from the phone's theme.
- * The emblem itself contains no near-black pixels at all, so the dark copy is
- * the same artwork with only its low-saturation pixels inverted: the duck and
- * the circle are untouched and the lettering lifts off the dark ground. That is
- * why this is not a CSS `invert` filter, which would turn the blue duck orange.
+ * The lettering is drawn here rather than taken from the artwork, so it can sit
+ * on top at the emblem's width and follow the phone's theme: black on a light
+ * screen, white on a dark one. An SVG `textLength` stretches it to the full
+ * width whatever font the phone substitutes, which a CSS font size cannot.
  *
- * `picture` rather than two `img` tags with `dark:hidden`, because a hidden
- * image is still downloaded: this way the phone fetches the one variant it will
- * actually show, and the header costs half as much on a club wifi connection.
+ * The emblem keeps two files because the artwork was made for a light
+ * background: the dark copy has only its low-saturation pixels inverted, so
+ * the blue duck and the circle are untouched. `picture` means the phone fetches
+ * only the variant it will show.
  *
- * Plain `img` rather than `next/image`: one small static asset at a fixed
- * height gives the optimiser nothing to do. The intrinsic size is declared so
- * the header does not reflow as it loads.
+ * Plain `img` rather than `next/image`: one small static asset gives the
+ * optimiser nothing to do. The intrinsic size is declared so the header does
+ * not reflow as it loads.
  */
-const NATURAL_WIDTH = 300;
-const NATURAL_HEIGHT = 143;
+const EMBLEM_WIDTH = 160;
+const EMBLEM_HEIGHT = 139;
 
-export default function Logo({ className = "h-11 sm:h-12" }: { className?: string }) {
+export default function Logo({ className = "w-10 sm:w-11" }: { className?: string }) {
   return (
-    // `display: contents` keeps the wrapper out of the layout entirely, so the
-    // image itself is the flex item and the sizing classes land where they work.
-    <picture className="contents">
-      <source srcSet="/rstc-logo-dark.png" media="(prefers-color-scheme: dark)" />
-      <img
-        src="/rstc-logo.png"
-        width={NATURAL_WIDTH}
-        height={NATURAL_HEIGHT}
-        alt="RSTC"
-        className={`${className} w-auto shrink-0`}
-      />
-    </picture>
+    <div className={`${className} flex shrink-0 flex-col gap-0.5`}>
+      <svg
+        viewBox="0 0 100 25"
+        className="block w-full text-black dark:text-white"
+        aria-hidden="true"
+      >
+        <text
+          x="0"
+          y="22"
+          textLength="100"
+          lengthAdjust="spacingAndGlyphs"
+          fontSize="30"
+          fontWeight="800"
+          fontFamily="Arial, Helvetica, sans-serif"
+          fill="currentColor"
+        >
+          RSTC
+        </text>
+      </svg>
+      <picture className="contents">
+        <source srcSet="/rstc-emblem-dark.png" media="(prefers-color-scheme: dark)" />
+        <img
+          src="/rstc-emblem.png"
+          width={EMBLEM_WIDTH}
+          height={EMBLEM_HEIGHT}
+          alt="RSTC"
+          className="block h-auto w-full"
+        />
+      </picture>
+    </div>
   );
 }
