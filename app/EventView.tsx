@@ -410,7 +410,16 @@ export default function EventView({
               mixer name truncate rather than shove the code off the screen. */}
           <div className="flex min-w-0 items-center gap-2.5">
             <Logo />
-            <h1 className="truncate text-lg font-semibold">{data.title || "Tennis mixer"}</h1>
+            {/* The app's name sits above the mixer's, small, so the badge and
+                the day's title still lead. */}
+            <div className="min-w-0">
+              <p className="text-xs font-bold leading-none tracking-wide text-emerald-700 dark:text-emerald-400">
+                MatchPoint
+              </p>
+              <h1 className="mt-1 truncate text-lg font-semibold leading-tight">
+                {data.title || "Tennis mixer"}
+              </h1>
+            </div>
           </div>
           <span className="shrink-0 rounded bg-black/5 px-2 py-0.5 font-mono text-xs tracking-widest dark:bg-white/10">
             {data.id}
