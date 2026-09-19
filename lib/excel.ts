@@ -229,7 +229,7 @@ export async function buildScheduleWorkbook(
   ratings?: Ratings
 ): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Tennis Doubles Mixer Scheduler";
+  wb.creator = "MatchPoint";
   wb.created = new Date();
 
   // Scores are optional: the workbook downloaded before play starts is the

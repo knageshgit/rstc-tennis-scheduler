@@ -20,7 +20,7 @@ import PinGate from "./PinGate";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Organizer · Tennis Mixer",
+  title: "Organizer · MatchPoint",
   // Nothing here should ever turn up in a search result.
   robots: { index: false, follow: false },
 };

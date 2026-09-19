@@ -14,7 +14,7 @@ import EventView from "./EventView";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "RSTC Tennis Mixer",
+  title: "MatchPoint · RSTC Tennis Mixer",
   description: "Today's schedule, results and leaderboard.",
 };
 
@@ -25,6 +25,9 @@ export default async function ClubPage() {
   return (
     <main className="mx-auto flex min-h-[70vh] w-full max-w-md flex-col justify-center px-6 text-center">
       <div className="text-4xl">🎾</div>
+      <p className="mt-3 text-sm font-bold tracking-wide text-emerald-700 dark:text-emerald-400">
+        MatchPoint
+      </p>
       <h1 className="mt-3 text-xl font-bold">No mixer is up yet</h1>
       <p className="mt-2 text-sm opacity-70">
         {isStoreConfigured()

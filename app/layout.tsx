@@ -13,9 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tennis Doubles Mixer Scheduler",
-  description:
-    "Upload a roster and generate a balanced doubles schedule: similar-level courts, no repeated partners, downloadable as Excel.",
+  title: "MatchPoint",
+  description: "RSTC tennis mixers: today's schedule, scores, leaderboard, survey and photos.",
+  applicationName: "MatchPoint",
+  // The name a phone gives the page when it is added to the home screen.
+  appleWebApp: { title: "MatchPoint" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

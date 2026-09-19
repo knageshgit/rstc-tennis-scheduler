@@ -426,9 +426,7 @@ export default function Generator({
             <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
               Organizer
             </p>
-            <h1 className="text-2xl font-bold sm:text-3xl">
-              🎾 Tennis Doubles Mixer Scheduler
-            </h1>
+            <h1 className="text-2xl font-bold sm:text-3xl">🎾 MatchPoint</h1>
           </div>
           <button
             onClick={signOut}

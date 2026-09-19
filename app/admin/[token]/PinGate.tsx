@@ -44,7 +44,7 @@ export default function PinGate({ token }: { token: string }) {
 
   return (
     <main className="mx-auto flex min-h-[70vh] w-full max-w-sm flex-col justify-center px-4">
-      <h1 className="text-xl font-bold">🎾 Organizer</h1>
+      <h1 className="text-xl font-bold">🎾 MatchPoint Organizer</h1>
       <p className="mt-2 text-sm opacity-70">
         Enter the organizer PIN to build and publish a schedule. This device will stay
         unlocked for a month.

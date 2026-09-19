@@ -34,7 +34,7 @@ import { getArchive, isStoreConfigured } from "@/lib/store";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Tournament results · RSTC Tennis Mixer",
+  title: "Tournament results · MatchPoint",
   description: "Final leaderboards from every RSTC mixer.",
 };
 
@@ -64,6 +64,9 @@ export default async function ResultsPage({
     <main className={`mx-auto w-full max-w-5xl p-4 sm:p-6 ${bare ? "" : "pb-16"}`}>
       {!bare && (
         <header className="mb-6">
+          <p className="mb-2 text-sm font-bold tracking-wide text-emerald-700 dark:text-emerald-400">
+            MatchPoint
+          </p>
           <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
             Tournament{" "}
             <span className="bg-gradient-to-r from-emerald-600 to-teal-500 bg-clip-text text-transparent dark:from-emerald-400 dark:to-teal-300">
